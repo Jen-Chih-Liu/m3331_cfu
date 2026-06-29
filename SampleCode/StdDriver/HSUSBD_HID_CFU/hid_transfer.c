@@ -303,6 +303,7 @@ void USBD20_IRQHandler(void)
 /*--------------------------------------------------------------------------*/
 void EPA_Handler(void)
 {
+    CFU_DBG("EPA IN tok\n");
     CFU_SetInReport();
 }
 
@@ -316,14 +317,14 @@ void EPB_Handler(void)
     for (i = 0; i < len; i++)
         g_u8OutBuff[i] = HSUSBD->EP[EPB].EPDAT_BYTE;
 
-    printf("EPB OUT len=%d\n", len);
-    printf("===========================\n");
+    CFU_DBG("EPB OUT len=%d\n", len);
+    CFU_DBG("===========================\n");
     for (i = 0; i < len; i++)
     {
-        printf("0x%02x ", g_u8OutBuff[i]);
-        if (i % 4 == 3 || i == len - 1) printf("\n");
+        CFU_DBG("0x%02x ", g_u8OutBuff[i]);
+        if (i % 4 == 3 || i == len - 1) CFU_DBG("\n");
     }
-    printf("===========================\n");
+    CFU_DBG("===========================\n");
 
     /* First byte is Report ID; skip it and pass the payload */
     if (len > 1)
@@ -384,7 +385,7 @@ void HID_Init(void)
                           HSUSBD_CEPINTEN_STSDONEIEN_Msk);
 
     HID_InitForHighSpeed();
-    printf("HID_Init\n");
+    CFU_DBG("HID_Init\n");
 }
 
 /*--------------------------------------------------------------------------*/
@@ -392,6 +393,12 @@ void HID_Init(void)
 /*--------------------------------------------------------------------------*/
 void HID_ClassRequest(void)
 {
+    CFU_DBG("HID_ClassRequest: bReq=0x%02X wVal=0x%04X wLen=%u dir=%s\n",
+           (unsigned)gUsbCmd.bRequest,
+           (unsigned)gUsbCmd.wValue,
+           (unsigned)gUsbCmd.wLength,
+           (gUsbCmd.bmRequestType & 0x80) ? "IN" : "OUT");
+
     if (gUsbCmd.bmRequestType & 0x80)   /* Device to host */
     {
         switch (gUsbCmd.bRequest)
@@ -439,10 +446,27 @@ void HID_ClassRequest(void)
                 }
                 else if (((gUsbCmd.wValue >> 8) & 0xff) == HID_RPT_TYPE_OUTPUT)
                 {
-                    /* Output report - acknowledge */
+                    /* Output report sent via HidD_SetOutputReport (Control EP SET_REPORT).
+                     * HSUSBD_CtrlOut() polls RXPKIF to read the data stage synchronously.
+                     * Disable RXPKIEN first so the ISR's RXPKIF handler does not clear
+                     * RXPKIF before HSUSBD_CtrlOut() gets to see it. */
+                    uint8_t  buf[64];
+                    uint32_t len = gUsbCmd.wLength;
+                    if (len > sizeof(buf)) len = sizeof(buf);
+
+                    /* Mask RXPKIEN: prevent RXPKIF ISR path from consuming the data */
+                    HSUSBD_ENABLE_CEP_INT(HSUSBD_CEPINTEN_SETUPPKIEN_Msk |
+                                          HSUSBD_CEPINTEN_STSDONEIEN_Msk);  /* no RXPKIEN */
+
+                    CFU_DBG("CtrlOut: wLen=%u calling HSUSBD_CtrlOut\n", (unsigned)len);
+                    int32_t ret = HSUSBD_CtrlOut(buf, len);
+                    CFU_DBG("CtrlOut: ret=%d\n", ret);
+                    if (len > 1)
+                        CFU_GetOutReport(buf + 1, len - 1);
                     HSUSBD_CLR_CEP_INT_FLAG(HSUSBD_CEPINTSTS_STSDONEIF_Msk);
                     HSUSBD_SET_CEP_STATE(HSUSBD_CEPCTL_NAKCLR);
-                    HSUSBD_ENABLE_CEP_INT(HSUSBD_CEPINTEN_STSDONEIEN_Msk);
+                    HSUSBD_ENABLE_CEP_INT(HSUSBD_CEPINTEN_SETUPPKIEN_Msk |
+                                          HSUSBD_CEPINTEN_STSDONEIEN_Msk);
                 }
                 else
                 {

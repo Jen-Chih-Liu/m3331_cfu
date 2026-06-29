@@ -1,0 +1,98 @@
+#! armclang --target=arm-arm-none-eabi -march=armv8-m.main -E -xc
+; command above MUST be in first line (no comment above!)
+
+/*
+;-------- <<< Use Configuration Wizard in Context Menu >>> -------------------
+*/
+
+/*--------------------- Flash Configuration ----------------------------------
+; <h> Flash Configuration
+;   <o0> Flash Base Address <0x0-0xFFFFFFFF:8>
+;   <o1> Flash Size (in Bytes) <0x0-0xFFFFFFFF:8>
+; </h>
+ *----------------------------------------------------------------------------*/
+#define __ROM_BASE      0x00020000
+#define __ROM_SIZE      0x00020000
+
+/*--------------------- Embedded RAM Configuration ---------------------------
+; <h> RAM Configuration
+;   <o0> RAM Base Address    <0x0-0xFFFFFFFF:8>
+;   <o1> RAM Size (in Bytes) <0x0-0xFFFFFFFF:8>
+; </h>
+ *----------------------------------------------------------------------------*/
+#define __RAM_BASE      0x20000000
+#define __RAM_SIZE      0x00050000
+
+/*--------------------- Stack / Heap Configuration ---------------------------
+; <h> Stack / Heap Configuration
+;   <o0> Stack Size (in Bytes) <0x0-0xFFFFFFFF:8>
+;   <o1> Heap Size (in Bytes) <0x0-0xFFFFFFFF:8>
+; </h>
+ *----------------------------------------------------------------------------*/
+#define __STACK_SIZE    0x00002000
+#define __HEAP_SIZE     0x00000c00
+
+/*
+;------------- <<< end of configuration section >>> ---------------------------
+*/
+
+
+/*----------------------------------------------------------------------------
+  User Stack & Heap boundary definition
+ *----------------------------------------------------------------------------*/
+#define __STACK_TOP    (__RAM_BASE + __STACK_SIZE)   /* located at begain of RW_RAM and stackseal */
+#define __HEAP_BASE    (AlignExpr(+0, 8))   /* starts after RW_RAM section, 8 byte aligned */
+
+
+/*----------------------------------------------------------------------------
+  Region base & size definition
+ *----------------------------------------------------------------------------*/
+#define __RO_BASE          ( __ROM_BASE )
+#define __RO_SIZE          ( __ROM_SIZE )
+
+#define __RW_BASE          ( __STACK_TOP )
+#define __RW_SIZE          ( __RAM_SIZE - __STACK_SIZE - __HEAP_SIZE )
+
+
+/*----------------------------------------------------------------------------
+  Scatter Region definition
+ *----------------------------------------------------------------------------*/
+LR_ROM __RO_BASE __RO_SIZE  {                       ; load region size_region
+  ER_ROM __RO_BASE (__RO_SIZE - 0x10)  {            ; load address = execution address
+   *(RESET, +First)                                 ; ER_ROM stops 16 bytes before end of ROM
+   *(InRoot$$Sections)                              ; to leave room for FW_VERSION + FW_CHECKSUM
+   .ANY (+RO)
+   .ANY (+XO)
+  }
+
+  ARM_LIB_STACK (__STACK_TOP) EMPTY -(__STACK_SIZE) {   ; Reserve empty region for stack
+  }
+
+  RW_RAM __RW_BASE __RW_SIZE  {                     ; RW data
+   .ANY (+RW +ZI)
+  }
+
+#if __HEAP_SIZE > 0
+  ARM_LIB_HEAP  __HEAP_BASE EMPTY  __HEAP_SIZE  {   ; Reserve empty region for heap
+  }
+#endif
+}
+
+; Separate load region — forces load base = execution base = (ROM_BASE + ROM_SIZE - 0x10)
+; so that fromelf --bin places the FW_VERSION word at binary offset 0x1FFF0.
+;
+; Firmware version word — fixed at ROM_SIZE - 16 bytes.
+;   AP1 flash address : 0x20000 + 0x20000 - 0x10 = 0x3FFF0
+;   Binary file offset: 0x1FFF0  (fromelf strips the load-region base address)
+; gen_offer_bin.py reads this with: --fw-bin <file> --version-offset 0x1FFF0
+;
+; Flash layout for the last 16 bytes:
+;   0x1FFF0 [4 bytes] FW_VERSION  (.fw_version section, g_FwVersion)
+;   0x1FFF4 [4 bytes] (unused / 0xFF)
+;   0x1FFF8 [4 bytes] FW_CHECKSUM (written by gen_checksum_bin.py post-build)
+;   0x1FFFC [4 bytes] (unused / 0xFF)
+LR_FW_VER (__RO_BASE + __RO_SIZE - 0x10) 0x10  {
+  FW_VERSION (__RO_BASE + __RO_SIZE - 0x10) 0x4  {
+   *(.fw_version)
+  }
+}

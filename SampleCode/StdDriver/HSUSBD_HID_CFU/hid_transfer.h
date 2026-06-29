@@ -10,6 +10,22 @@
 
 #include "hid_cfu.h"
 
+/*---------------------------------------------------------------------------*/
+/* UART debug message switch                                                  */
+/*   Set CFU_DEBUG to 1 to enable UART debug prints, 0 to disable them.       */
+/*   Use CFU_DBG(...) in place of printf for debug-only messages.            */
+/*---------------------------------------------------------------------------*/
+#ifndef CFU_DEBUG
+#define CFU_DEBUG   1
+#endif
+
+#if CFU_DEBUG
+#include <stdio.h>
+#define CFU_DBG(...)   printf(__VA_ARGS__)
+#else
+#define CFU_DBG(...)   ((void)0)
+#endif
+
 /* Define the vendor id and product id (CFU uses hid_cfu.h values) */
 #define USBD_VID        USBD_CFU_VID
 #define USBD_PID        USBD_CFU_PID
@@ -68,6 +84,9 @@ extern uint8_t volatile g_u8Suspend;
 extern uint8_t g_u8CfuInBuf[64];
 extern volatile uint32_t g_u32CfuInLen;
 extern volatile uint8_t g_u8CfuInReady;
+
+/* Set after a successful update + bank switch; main loop reboots into new bank */
+extern volatile uint8_t g_u8ResetPending;
 
 /*-------------------------------------------------------------*/
 void HID_Init(void);

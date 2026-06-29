@@ -17,8 +17,9 @@
 /* Globals                                                                                                 */
 /*---------------------------------------------------------------------------------------------------------*/
 /* Component registrations defined in ComponentFwUpdate.c */
-extern volatile COMPONENT_REGISTRATION s_Comp_Registration;
+/* s_Comp_Registration (COMPONENT_02) disabled */
 extern volatile COMPONENT_REGISTRATION s_Comp_Registration_2;
+extern const uint32_t g_FwVersion;
 
 /*---------------------------------------------------------------------------------------------------------*/
 /* Function prototypes                                                                                     */
@@ -112,6 +113,19 @@ int32_t main(void)
     printf("|  NuMicro m3331 HSUSBD CFU + HID Transfer Sample Code   |\n");
     printf("+--------------------------------------------------------+\n");
 
+    /* Enable FMC to read VECMAP before any other FMC operation */
+    SYS_UnlockReg();
+    FMC_Open();
+    printf("Boot Vector (VECMAP) : 0x%08X\n", FMC_GetVECMAP());
+    printf("FW Version           : 0x%08X  (Major=0x%02X  Minor=0x%04X  Build=0x%02X)\n",
+           g_FwVersion,
+           (g_FwVersion >> 24) & 0xFFU,
+           (g_FwVersion >>  8) & 0xFFFFU,
+           (g_FwVersion >>  0) & 0xFFU);
+    printf("+--------------------------------------------------------+\n");
+    FMC_Close();
+    SYS_LockReg();
+
     /* Open HSUSBD and register HID class request handler */
     HSUSBD_Open(&gsHSInfo, HID_ClassRequest, NULL);
     HSUSBD_SetVendorRequest(HID_VendorRequest);
@@ -134,7 +148,7 @@ int32_t main(void)
     FirmwareUpdateInit();
 
     /* Register component chain */
-    IComponentFirmwareUpdateRegisterComponent((COMPONENT_REGISTRATION *)&s_Comp_Registration);
+    /* COMPONENT_02 disabled: only the active AP bank component is registered */
     IComponentFirmwareUpdateRegisterComponent((COMPONENT_REGISTRATION *)&s_Comp_Registration_2);
 
     /* Build initial FW version response */
@@ -143,5 +157,14 @@ int32_t main(void)
     while (1)
     {
         /* Main loop: CFU processing is driven by USB interrupts */
+        if (g_u8ResetPending)
+        {
+            /* Give the host time to read the final SUCCESS report and
+             * complete the control transfer before USB drops on reset. */
+            volatile uint32_t d;
+            for (d = 0; d < 0x800000; d++) {}
+            printf("Rebooting into new bank...\n");
+            NVIC_SystemReset();
+        }
     }
 }

@@ -202,7 +202,8 @@ typedef struct
 typedef enum
 {
     COMPONENT_02      = (0x02U),
-    COMPONENT_30      = (0x30U),
+    COMPONENT_30      = (0x30U),    /* AP0 slot: 0x00000 - 0x1FFFF */
+    COMPONENT_31      = (0x31U),    /* AP1 slot: 0x20000 - 0x3FFFF */
     // Developer TODO - Add more platform component ID's here
 } FWUPDATE_PFID;
 

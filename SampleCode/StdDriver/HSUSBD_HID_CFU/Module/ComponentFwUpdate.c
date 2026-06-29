@@ -47,6 +47,15 @@ Environment:
 #include "hid_cfu.h"
 
 #define CPFWU_REVISION  (2u)
+
+/* ACTIVE_BANK is set in the Keil target preprocessor:
+ *   Target "AP0": ACTIVE_BANK=0  (firmware loaded at 0x00000, writes CFU to AP1)
+ *   Target "AP1": ACTIVE_BANK=1  (firmware loaded at 0x20000, writes CFU to AP0)
+ */
+#ifndef ACTIVE_BANK
+#define ACTIVE_BANK 0
+#endif
+
 #define ENTER_CRITICAL_SECTION() \
     uint32_t primask = __get_PRIMASK(); \
     __set_PRIMASK(1)
@@ -74,12 +83,18 @@ TIMER_ID BSP_Timer_Create(void (* pTimerCallback)(void), UINT32 timeoutMs)
 
 void BSP_Timer_Stop(TIMER_ID timerId)
 {
-    printf("Timer_Stop\n");
+    CFU_DBG("Timer_Stop\n");
     TIMER_Stop(TIMER0);
 }
 
 void BSP_Timer_Restart(TIMER_ID timerId)
 {
+    /* Stop → reset counter → clear any pending interrupt → restart.
+     * TIMER_Start alone does NOT reset the counter; without this sequence
+     * the timer fires immediately if it was nearly expired since boot. */
+    TIMER_Stop(TIMER0);
+    TIMER_ResetCounter(TIMER0);
+    TIMER_ClearIntFlag(TIMER0);
     TIMER_Start(TIMER0);
 }
 
@@ -99,8 +114,8 @@ typedef struct
 /*---------------------------------------------------------------------------------------------------------*/
 /* Forward declarations                                                                                    */
 /*---------------------------------------------------------------------------------------------------------*/
-MCU_STATUS GetVersionImpl_comp02(UINT32* pVersion);
 MCU_STATUS GetVersionImpl_comp30(UINT32* pVersion);
+MCU_STATUS GetVersionImpl_comp31(UINT32* pVersion);
 MCU_STATUS GetProductInfoImpl(UINT32* pProductInfo);
 MCU_STATUS ProcessOfferImpl(FWUPDATE_OFFER_COMMAND* pCommand, FWUPDATE_OFFER_RESPONSE* pResponse);
 MCU_STATUS GetCrcOffsetImpl(UINT32* pOffset);
@@ -108,7 +123,6 @@ MCU_STATUS NotifySuccessImpl(BOOL forceReset, READ_FIRMWARE_FUNC readHandler,
                              READ_COMPLETED_FUNC readCompleteHandler);
 
 static ICOMPONENT_INTERFACE  s_IComp_Interface[64];
-static uint8_t               fake_update = 0;
 
 /* s_Comp_Registration_2 must be defined first so s_Comp_Registration can
  * take its address in the initialiser. */
@@ -116,26 +130,21 @@ volatile COMPONENT_REGISTRATION s_Comp_Registration_2 =
 {
     .pNext = NULL,
     .interface = {
-        .GetVersion     = GetVersionImpl_comp30,
+#if ACTIVE_BANK == 0
+        .GetVersion     = GetVersionImpl_comp30,  /* AP0 running: report AP0 version */
+#else
+        .GetVersion     = GetVersionImpl_comp31,  /* AP1 running: report AP1 version */
+#endif
         .GetProductInfo = GetProductInfoImpl,
         .ProcessOffer   = ProcessOfferImpl,
         .GetCrcOffset   = GetCrcOffsetImpl,
         .NotifySuccess  = NotifySuccessImpl
     },
-    .componentId = COMPONENT_30
-};
-
-volatile COMPONENT_REGISTRATION s_Comp_Registration =
-{
-    .pNext = &s_Comp_Registration_2,
-    .interface = {
-        .GetVersion     = GetVersionImpl_comp02,
-        .GetProductInfo = GetProductInfoImpl,
-        .ProcessOffer   = ProcessOfferImpl,
-        .GetCrcOffset   = GetCrcOffsetImpl,
-        .NotifySuccess  = NotifySuccessImpl
-    },
-    .componentId = COMPONENT_02
+#if ACTIVE_BANK == 0
+    .componentId = COMPONENT_30   /* AP0 running */
+#else
+    .componentId = COMPONENT_31   /* AP1 running */
+#endif
 };
 
 static CURRENT_OFFER_INFO       s_currentOffer;
@@ -146,6 +155,7 @@ static BOOL                     s_bankSwapPending = FALSE;
 uint32_t g_u32Index = 0;
 static uint32_t g_u32OfferStage   = 0;
 static uint32_t g_u32ContentStage = 0;
+volatile uint8_t g_u8ResetPending = 0;  /* set after bank switch; main loop reboots after final IN report sent */
 
 static FWUPDATE_OFFER_COMMAND         s_FwUpdate_Offer_Cmd;
 FWUPDATE_OFFER_RESPONSE               s_FwUpdate_Offer_Resp;
@@ -172,24 +182,39 @@ void TMR0_IRQHandler(void)
 {
     if (TIMER_GetIntFlag(TIMER0) == 1)
     {
-        printf("TMR0_IRQ\n");
+        CFU_DBG("TMR0_IRQ\n");
         TIMER_ClearIntFlag(TIMER0);
         _UpdateTimerCallback();
     }
 }
 
 /*---------------------------------------------------------------------------------------------------------*/
+/* Firmware version — placed at ROM_SIZE - 16 bytes via scatter file section .fw_version.                 */
+/*   AP0: flash 0x1FFF0, binary offset 0x1FFF0                                                             */
+/*   AP1: flash 0x3FFF0, binary offset 0x1FFF0 (objcopy strips base)                                      */
+/* Flash tail layout:                                                                                      */
+/*   0x1FFF0 [4B] FW_VERSION  (this variable)                                                              */
+/*   0x1FFF4 [4B] (unused / 0xFF)                                                                          */
+/*   0x1FFF8 [4B] FW_CHECKSUM (written post-build by gen_checksum_bin.py)                                  */
+/*   0x1FFFC [4B] (unused / 0xFF)                                                                          */
+/* gen_offer_bin.py: --fw-bin <file> --version-offset 0x1FFF0                                              */
+/*---------------------------------------------------------------------------------------------------------*/
+#define FW_VERSION_VALUE   0x03000002u
+
+const uint32_t g_FwVersion __attribute__((section(".fw_version"), used)) = FW_VERSION_VALUE;
+
+/*---------------------------------------------------------------------------------------------------------*/
 /* Component interface implementations                                                                     */
 /*---------------------------------------------------------------------------------------------------------*/
 MCU_STATUS GetVersionImpl_comp30(UINT32* pVersion)
 {
-    *pVersion = 0x7c000000;
+    *pVersion = g_FwVersion;   /* AP0 firmware version — defined above */
     return MCU_STATUS_SUCCESS;
 }
 
-MCU_STATUS GetVersionImpl_comp02(UINT32* pVersion)
+MCU_STATUS GetVersionImpl_comp31(UINT32* pVersion)
 {
-    *pVersion = 0x7c000000;
+    *pVersion = g_FwVersion;   /* AP1 firmware version — defined above */
     return MCU_STATUS_SUCCESS;
 }
 
@@ -201,31 +226,21 @@ MCU_STATUS GetProductInfoImpl(UINT32* pProductInfo)
 
 MCU_STATUS ProcessOfferImpl(FWUPDATE_OFFER_COMMAND* pCommand, FWUPDATE_OFFER_RESPONSE* pResponse)
 {
-    unsigned int target_version = 0x7B000000;
-    printf("pCommand->version = %u\n", pCommand->version);
+    /* Accept if offered version is strictly newer than the running firmware. */
+    CFU_DBG("pCommand->version = 0x%08X, g_FwVersion = 0x%08X\n",
+           pCommand->version, g_FwVersion);
 
-    if (pCommand->version > target_version)
+    memset(pResponse, 0, sizeof(FWUPDATE_OFFER_RESPONSE));
+    pResponse->token = pCommand->componentInfo.token;
+
+    if (pCommand->version > g_FwVersion)
     {
-        memset(pResponse, 0, sizeof(FWUPDATE_OFFER_RESPONSE));
-        pResponse->rejectReasonCode = FIRMWARE_OFFER_REJECT_OLD_FW;
-        pResponse->token = pCommand->componentInfo.token;
-
-        if (fake_update < 1)
-        {
-            pResponse->status = FIRMWARE_UPDATE_OFFER_ACCEPT;
-            fake_update++;
-        }
-        else
-        {
-            pResponse->status = FIRMWARE_UPDATE_OFFER_REJECT;
-        }
+        pResponse->status = FIRMWARE_UPDATE_OFFER_ACCEPT;
     }
     else
     {
-        memset(pResponse, 0, sizeof(FWUPDATE_OFFER_RESPONSE));
         pResponse->rejectReasonCode = FIRMWARE_OFFER_REJECT_OLD_FW;
-        pResponse->token = pCommand->componentInfo.token;
-        pResponse->status = FIRMWARE_UPDATE_OFFER_REJECT;
+        pResponse->status           = FIRMWARE_UPDATE_OFFER_REJECT;
     }
 
     return MCU_STATUS_SUCCESS;
@@ -233,14 +248,44 @@ MCU_STATUS ProcessOfferImpl(FWUPDATE_OFFER_COMMAND* pCommand, FWUPDATE_OFFER_RES
 
 MCU_STATUS GetCrcOffsetImpl(UINT32* pOffset)
 {
-    *pOffset = 0x0;
-    return MCU_STATUS_SUCCESS;
+    /* The firmware binary does not embed a CRC at a fixed offset.
+     * Signal the protocol layer to skip the read-back CRC compare and
+     * proceed directly to ICompFwUpdateBspAuthenticateFWImage(). */
+    (void)pOffset;
+    return MCU_STATUS_CFU_CRC_CHECK_NOT_REQUIRED;
 }
 
 MCU_STATUS NotifySuccessImpl(BOOL forceReset, READ_FIRMWARE_FUNC readHandler,
                              READ_COMPLETED_FUNC readCompleteHandler)
 {
+    (void)readHandler;
+    (void)forceReset;
+
+    CFU_DBG("NotifySuccessImpl: firmware update complete, switching boot source\n");
+
+    /* Mark update as finished */
     readCompleteHandler();
+
+    /* Switch boot source to the bank we just programmed (the inactive one) */
+    SYS_UnlockReg();
+    FMC_Open();
+#if ACTIVE_BANK == 0
+     /* Running AP0 → boot AP1 on next reset */
+	
+	 FMC_SetVectorPageAddr(0x20000);
+	
+#else
+	 /* Running AP1 → boot AP0 on next reset */
+	 FMC_SetVectorPageAddr(0x00000);
+     
+#endif
+    FMC_Close();
+
+    /* Defer reset until the final content SUCCESS report has been sent to
+     * the host (done in CFU_SetInReport). Resetting here would drop the
+     * USB device before the host reads the response, causing the host tool
+     * to report "device not functioning". */
+    g_u8ResetPending = 1;
     return MCU_STATUS_SUCCESS;
 }
 
@@ -251,7 +296,7 @@ UINT32 FirmwareUpdateInit(void)
 {
     s_updateTimer = BSP_Timer_Create(_UpdateTimerCallback,
                                      MAX_FW_UPDATE_TIME_FAIL_SAFE_MS);
-    printf("FirmwareUpdateInit\n");
+    CFU_DBG("FirmwareUpdateInit\n");
     return 0;
 }
 
@@ -260,11 +305,11 @@ UINT32 FirmwareUpdateInit(void)
 /*---------------------------------------------------------------------------------------------------------*/
 void IComponentFirmwareUpdateRegisterComponent(COMPONENT_REGISTRATION* pRegistration)
 {
-    printf("IComponentFirmwareUpdateRegisterComponent\n");
+    CFU_DBG("IComponentFirmwareUpdateRegisterComponent\n");
 
     if (!pRegistration)
     {
-        printf("!pRegistration\n");
+        CFU_DBG("!pRegistration\n");
         return;
     }
 
@@ -282,7 +327,7 @@ void IComponentFirmwareUpdateRegisterComponent(COMPONENT_REGISTRATION* pRegistra
 void ProcessCFWUContent(FWUPDATE_CONTENT_COMMAND* pCommand,
                         FWUPDATE_CONTENT_RESPONSE* pResponse)
 {
-    printf("ProcessCFWUContent\n");
+    CFU_DBG("ProcessCFWUContent\n");
     UINT8  status         = FIRMWARE_UPDATE_STATUS_SUCCESS;
     UINT8  length         = pCommand->length;
     UINT16 sequenceNumber = pCommand->sequenceNumber;
@@ -302,10 +347,19 @@ void ProcessCFWUContent(FWUPDATE_CONTENT_COMMAND* pCommand,
         }
     }
 
-    if (pCommand->flags & FIRMWARE_UPDATE_FLAG_LAST_BLOCK)
+    if ((pCommand->flags & FIRMWARE_UPDATE_FLAG_LAST_BLOCK) &&
+        status == FIRMWARE_UPDATE_STATUS_SUCCESS)
     {
-        if (ICompFwUpdateBspWrite(pCommand->address, pCommand->pData,
-                                  pCommand->length, componentId) == 0)
+        /* Write only if this block was NOT also the first block.
+         * First-block data was already written in the handler above. */
+        if (!(pCommand->flags & FIRMWARE_UPDATE_FLAG_FIRST_BLOCK))
+        {
+            if (ICompFwUpdateBspWrite(pCommand->address, pCommand->pData,
+                                      pCommand->length, componentId) != 0)
+                status = FIRMWARE_UPDATE_STATUS_ERROR_WRITE;
+        }
+
+        if (status == FIRMWARE_UPDATE_STATUS_SUCCESS)
         {
             COMPONENT_REGISTRATION* pRegistration     = s_pFirstComponentIFace;
             MCU_STATUS              getCrcOffsetResult = MCU_STATUS_DEFAULT_ERROR;
@@ -316,17 +370,23 @@ void ProcessCFWUContent(FWUPDATE_CONTENT_COMMAND* pCommand,
                 if (pRegistration->componentId == componentId)
                 {
                     getCrcOffsetResult = pRegistration->interface.GetCrcOffset(&crcOffset);
-                    printf("getCrcOffsetResult = %d\n", getCrcOffsetResult);
+                    CFU_DBG("getCrcOffsetResult = %d\n", getCrcOffsetResult);
                     break;
                 }
                 pRegistration = pRegistration->pNext;
             }
 
-            if (!MCU_SUCCESS(getCrcOffsetResult))
+            if (getCrcOffsetResult == MCU_STATUS_CFU_CRC_CHECK_NOT_REQUIRED)
+            {
+                /* CRC compare skipped: authenticate the written image directly. */
+                if (ICompFwUpdateBspAuthenticateFWImage() != 0)
+                    status = FIRMWARE_UPDATE_STATUS_ERROR_SIGNATURE;
+            }
+            else if (!MCU_SUCCESS(getCrcOffsetResult))
             {
                 status = FIRMWARE_UPDATE_STATUS_ERROR_INVALID;
             }
-            else if (getCrcOffsetResult != MCU_STATUS_CFU_CRC_CHECK_NOT_REQUIRED)
+            else
             {
                 UINT16 crc;
                 UINT16 calculatedCrc;
@@ -340,11 +400,6 @@ void ProcessCFWUContent(FWUPDATE_CONTENT_COMMAND* pCommand,
                 else if (ICompFwUpdateBspAuthenticateFWImage() != 0)
                     status = FIRMWARE_UPDATE_STATUS_ERROR_SIGNATURE;
             }
-            else
-            {
-                if (ICompFwUpdateBspAuthenticateFWImage() != 0)
-                    status = FIRMWARE_UPDATE_STATUS_ERROR_SIGNATURE;
-            }
 
             if (status == FIRMWARE_UPDATE_STATUS_SUCCESS)
             {
@@ -356,10 +411,6 @@ void ProcessCFWUContent(FWUPDATE_CONTENT_COMMAND* pCommand,
                 else
                     status = FIRMWARE_UPDATE_STATUS_ERROR_COMPLETE;
             }
-        }
-        else
-        {
-            status = FIRMWARE_UPDATE_STATUS_ERROR_WRITE;
         }
     }
 
@@ -389,7 +440,7 @@ void ProcessCFWUContent(FWUPDATE_CONTENT_COMMAND* pCommand,
 void ProcessCFWUOffer(FWUPDATE_OFFER_COMMAND* pCommand,
                       FWUPDATE_OFFER_RESPONSE* pResponse)
 {
-    printf("ProcessCFWUOffer\n");
+    CFU_DBG("ProcessCFWUOffer\n");
     UINT8 token       = pCommand->componentInfo.token;
     UINT8 componentId = pCommand->componentInfo.componentId;
     UINT8 segmentNumber = pCommand->componentInfo.segmentNumber;
@@ -403,11 +454,21 @@ void ProcessCFWUOffer(FWUPDATE_OFFER_COMMAND* pCommand,
         pResponse->rejectReasonCode = 0;
 
         if (segmentNumber == OFFER_INFO_START_ENTIRE_TRANSACTION)
-            printf("OFFER_INFO_START_ENTIRE_TRANSACTION\n");
+        {
+            CFU_DBG("OFFER_INFO_START_ENTIRE_TRANSACTION\n");
+            /* Reset all transaction state so a retry or second update works correctly */
+            memset(&s_FwUpdate_Offer_Resp, 0, sizeof(s_FwUpdate_Offer_Resp));
+            s_currentOffer.updateInProgress = FALSE;
+            s_currentOffer.forceReset       = FALSE;
+            s_bankSwapPending               = FALSE;
+            g_u32Index                      = 0;
+            g_u32OfferStage                 = 0;
+            g_u32ContentStage               = 0;
+        }
         else if (segmentNumber == OFFER_INFO_START_OFFER_LIST)
-            printf("OFFER_INFO_START_OFFER_LIST\n");
+            CFU_DBG("OFFER_INFO_START_OFFER_LIST\n");
         else if (segmentNumber == OFFER_INFO_END_OFFER_LIST)
-            printf("OFFER_INFO_END_OFFER_LIST\n");
+            CFU_DBG("OFFER_INFO_END_OFFER_LIST\n");
 
         return;
     }
@@ -459,7 +520,7 @@ void ProcessCFWUOffer(FWUPDATE_OFFER_COMMAND* pCommand,
                  && (pResponse->rejectReasonCode == FIRMWARE_OFFER_REJECT_OLD_FW))
                 {
                     pResponse->status = FIRMWARE_UPDATE_OFFER_ACCEPT;
-                    printf("ACCEPT (force)\n");
+                    CFU_DBG("ACCEPT (force)\n");
                 }
             }
 
@@ -469,7 +530,7 @@ void ProcessCFWUOffer(FWUPDATE_OFFER_COMMAND* pCommand,
                 s_currentOffer.updateInProgress = TRUE;
                 s_currentOffer.forceReset       = forceReset;
                 s_currentOffer.activeComponentId = componentId;
-                printf("Offer ok\n");
+                CFU_DBG("Offer ok\n");
             }
         }
 
@@ -482,7 +543,7 @@ void ProcessCFWUOffer(FWUPDATE_OFFER_COMMAND* pCommand,
 /*---------------------------------------------------------------------------------------------------------*/
 void ProcessCFWUGetFWVersion(GET_FWVERSION_RESPONSE* pResponse)
 {
-    printf("ProcessCFWUGetFWVersion\n");
+    CFU_DBG("ProcessCFWUGetFWVersion\n");
     memset(pResponse, 0, sizeof(GET_FWVERSION_RESPONSE));
     pResponse->header.fwUpdateRevision = CPFWU_REVISION;
 
@@ -494,7 +555,7 @@ void ProcessCFWUGetFWVersion(GET_FWVERSION_RESPONSE* pResponse)
     {
         if (pRegistration->interface.GetVersion == NULL)
         {
-            printf("Error: GetVersion function pointer is NULL\n");
+            CFU_DBG("Error: GetVersion function pointer is NULL\n");
             break;
         }
         pRegistration->interface.GetVersion(pVersion);
@@ -515,64 +576,41 @@ void ProcessCFWUGetFWVersion(GET_FWVERSION_RESPONSE* pResponse)
 /*---------------------------------------------------------------------------------------------------------*/
 void CFU_GetOutReport(uint8_t *pu8EpBuf, uint32_t u32Size)
 {
-    printf("FwUpdate_Offer_Resp status = %d\n", s_FwUpdate_Offer_Resp.status);
+    CFU_DBG("CFU_GetOutReport: offer_status=%d size=%u\n",
+           s_FwUpdate_Offer_Resp.status, u32Size);
 
     if (s_FwUpdate_Offer_Resp.status == FIRMWARE_UPDATE_OFFER_ACCEPT)
     {
-        /* Content phase */
-        printf("FIRMWARE_UPDATE_OFFER_ACCEPT ROUTE\n");
-        memcpy((uint8_t *)&s_FwUpdate_Cont_Cmd[g_u32Index], pu8EpBuf, u32Size);
-        g_u32Index += u32Size;
+        /* Content phase: each OUT packet is one complete FWUPDATE_CONTENT_COMMAND.
+         * Process every block immediately — no accumulation, no stage gating. */
+        CFU_DBG("Content block received\n");
+        memcpy((uint8_t *)&s_FwUpdate_Cont_Cmd[0], pu8EpBuf,
+               u32Size < sizeof(s_FwUpdate_Cont_Cmd[0]) ? u32Size : sizeof(s_FwUpdate_Cont_Cmd[0]));
 
-        if (u32Size >= 8 && g_u32ContentStage == 0)
-        {
-            ProcessCFWUContent(&s_FwUpdate_Cont_Cmd[g_u32Index - u32Size],
-                               &s_FwUpdate_Cont_Resp);
+        ProcessCFWUContent((FWUPDATE_CONTENT_COMMAND *)&s_FwUpdate_Cont_Cmd[0],
+                           &s_FwUpdate_Cont_Resp);
 
-            /* Prepare IN response: REPORT_ID_PAYLOAD_INPUT + 16 bytes response */
-            g_u8CfuInBuf[0] = REPORT_ID_PAYLOAD_INPUT;
-            memcpy(g_u8CfuInBuf + 1, (void *)&s_FwUpdate_Cont_Resp, 16);
-            g_u32CfuInLen  = 17;
-            g_u32ContentStage = 1;
-            g_u8CfuInReady = 1;
-        }
+        /* Write response to EPA FIFO immediately */
+        g_u32ContentStage = 1;
+        g_u8CfuInReady    = 1;
     }
     else
     {
-        g_u32Index += u32Size;
+        /* Offer phase: each OUT packet is one complete FWUPDATE_OFFER_COMMAND. */
+        CFU_DBG("Offer packet received\n");
+        memcpy((uint8_t *)&s_FwUpdate_Offer_Cmd, pu8EpBuf,
+               u32Size < sizeof(s_FwUpdate_Offer_Cmd) ? u32Size : sizeof(s_FwUpdate_Offer_Cmd));
 
-        if ((g_u32Index == 16) && g_u32OfferStage < 8)
-        {
-            /* Offer phase */
-            memcpy((uint8_t *)&s_FwUpdate_Offer_Cmd, pu8EpBuf, u32Size);
-            ProcessCFWUOffer(&s_FwUpdate_Offer_Cmd, &s_FwUpdate_Offer_Resp);
+        ProcessCFWUOffer(&s_FwUpdate_Offer_Cmd, &s_FwUpdate_Offer_Resp);
 
-            /* Prepare IN response: REPORT_ID_OFFER_INPUT + 16 bytes response */
-            g_u8CfuInBuf[0] = REPORT_ID_OFFER_INPUT;
-            memcpy(g_u8CfuInBuf + 1, (void *)&s_FwUpdate_Offer_Resp, 16);
-            g_u32CfuInLen = 17;
-            g_u32OfferStage++;
-            g_u8CfuInReady = 1;
-        }
-        else
-        {
-            printf("NOT FIRMWARE_UPDATE_OFFER_ACCEPT ROUTE\n");
-            memcpy((uint8_t *)&s_FwUpdate_Cont_Cmd[g_u32Index], pu8EpBuf, u32Size);
-            g_u32Index += u32Size;
-
-            if (u32Size >= 8 && g_u32ContentStage == 0)
-            {
-                ProcessCFWUContent(&s_FwUpdate_Cont_Cmd[g_u32Index - u32Size],
-                                   &s_FwUpdate_Cont_Resp);
-
-                g_u8CfuInBuf[0] = REPORT_ID_PAYLOAD_INPUT;
-                memcpy(g_u8CfuInBuf + 1, (void *)&s_FwUpdate_Cont_Resp, 16);
-                g_u32CfuInLen  = 17;
-                g_u32ContentStage = 1;
-                g_u8CfuInReady = 1;
-            }
-        }
+        /* Write response to EPA FIFO immediately */
+        g_u32OfferStage = 1;
+        g_u8CfuInReady  = 1;
     }
+
+    /* Write the queued response to EPA FIFO and arm INTKIEN so the
+     * host's ReadFile (Interrupt IN) receives the report. */
+    CFU_SetInReport();
 }
 
 /*---------------------------------------------------------------------------------------------------------*/
@@ -585,9 +623,9 @@ void CFU_SetInReport(void)
 
     if (g_u32ContentStage == 1)
     {
-        printf("g_u32ContentStage IN\n");
-        /* Prepare next response: REPORT_ID_PAYLOAD_OUTPUT + content response */
-        g_u8CfuInBuf[0] = REPORT_ID_PAYLOAD_OUTPUT;
+        CFU_DBG("g_u32ContentStage IN\n");
+        /* Prepare response: REPORT_ID_PAYLOAD_INPUT + content response */
+        g_u8CfuInBuf[0] = REPORT_ID_PAYLOAD_INPUT;
         memcpy(g_u8CfuInBuf + 1, (void *)&s_FwUpdate_Cont_Resp,
                sizeof(s_FwUpdate_Cont_Resp));
         g_u32CfuInLen = sizeof(s_FwUpdate_Cont_Resp) + 1;
@@ -595,18 +633,25 @@ void CFU_SetInReport(void)
         g_u32Index = 0;
         g_u8CfuInReady = 0;
 
-        /* Write to EPA FIFO */
+        /* Write to EPA FIFO and arm interrupt so host's ReadFile receives it */
         for (i = 0; i < g_u32CfuInLen; i++)
             HSUSBD->EP[EPA].EPDAT_BYTE = g_u8CfuInBuf[i];
         HSUSBD->EP[EPA].EPTXCNT = g_u32CfuInLen;
+        HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
+
+        /* If the final block completed the update, the host has now been
+         * given the SUCCESS response. The actual reboot is deferred to the
+         * main loop (g_u8ResetPending) so the USB control transfer and IN
+         * read can finish first; resetting here drops USB mid-transfer and
+         * the host tool reports "device not functioning". */
         return;
     }
 
     if (g_u32OfferStage == 1)
     {
-        printf("g_u32OfferStage IN\n");
-        /* Prepare next response: REPORT_ID_OFFER_OUTPUT + offer response */
-        g_u8CfuInBuf[0] = REPORT_ID_OFFER_OUTPUT;
+        CFU_DBG("g_u32OfferStage IN\n");
+        /* Prepare response: REPORT_ID_OFFER_INPUT + offer response */
+        g_u8CfuInBuf[0] = REPORT_ID_OFFER_INPUT;
         memcpy(g_u8CfuInBuf + 1, (void *)&s_FwUpdate_Offer_Resp,
                sizeof(s_FwUpdate_Offer_Resp));
         g_u32CfuInLen = sizeof(s_FwUpdate_Offer_Resp) + 1;
@@ -614,20 +659,14 @@ void CFU_SetInReport(void)
         g_u32Index = 0;
         g_u8CfuInReady = 0;
 
-        /* Write to EPA FIFO */
+        /* Write to EPA FIFO and arm interrupt so host's ReadFile receives it */
         for (i = 0; i < g_u32CfuInLen; i++)
             HSUSBD->EP[EPA].EPDAT_BYTE = g_u8CfuInBuf[i];
         HSUSBD->EP[EPA].EPTXCNT = g_u32CfuInLen;
+        HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
         return;
     }
 
-    /* If g_u8CfuInReady is set but stages have not yet transitioned,
-     * send the buffered data from CFU_GetOutReport */
-    if (g_u8CfuInReady)
-    {
-        g_u8CfuInReady = 0;
-        for (i = 0; i < g_u32CfuInLen; i++)
-            HSUSBD->EP[EPA].EPDAT_BYTE = g_u8CfuInBuf[i];
-        HSUSBD->EP[EPA].EPTXCNT = g_u32CfuInLen;
-    }
+    /* No pending data: disable INTKIEN to stop spurious EPA interrupts */
+    HSUSBD_ENABLE_EP_INT(EPA, 0);
 }
