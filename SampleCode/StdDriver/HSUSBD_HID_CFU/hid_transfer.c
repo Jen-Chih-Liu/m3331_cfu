@@ -11,8 +11,13 @@
 #include "NuMicro.h"
 #include "hid_transfer.h"
 #include "hid_cfu.h"
+#include "isp_cmd.h"
 
 uint8_t volatile g_u8Suspend = 0;
+
+/* Scratch buffers for the ISP protocol channel (Report ID based). */
+__attribute__((aligned(4))) static uint8_t g_au8IspReq[64];
+__attribute__((aligned(4))) static uint8_t g_au8IspResp[64];
 
 /* CFU IN buffer shared with ComponentFwUpdate.c */
 uint8_t          g_u8CfuInBuf[64];
@@ -326,9 +331,39 @@ void EPB_Handler(void)
     }
     CFU_DBG("===========================\n");
 
-    /* First byte is Report ID; skip it and pass the payload */
-    if (len > 1)
+    /* First byte is Report ID; route ISP vs CFU by Report ID. */
+    if (len > 1 && g_u8OutBuff[0] == REPORT_ID_ISP_OUTPUT)
+        ISP_HandleOutReport(g_u8OutBuff + 1, len - 1);
+    else if (len > 1)
         CFU_GetOutReport(g_u8OutBuff + 1, len - 1);
+}
+
+/*--------------------------------------------------------------------------*/
+/*  ISP: handle an ISP command payload and queue the response on EPA          */
+/*--------------------------------------------------------------------------*/
+void ISP_HandleOutReport(uint8_t *pu8Payload, uint32_t u32Len)
+{
+    uint32_t i;
+
+    if (u32Len > sizeof(g_au8IspReq))
+        u32Len = sizeof(g_au8IspReq);
+
+    memset(g_au8IspReq, 0, sizeof(g_au8IspReq));
+    memcpy(g_au8IspReq, pu8Payload, u32Len);
+    memset(g_au8IspResp, 0, sizeof(g_au8IspResp));
+
+    ParseISPCmd(g_au8IspReq, (uint8_t)u32Len, g_au8IspResp);
+
+    /* Queue response: REPORT_ID_ISP_INPUT + 63 payload bytes = 64-byte packet.
+     * Reuse g_u8CfuInBuf; ISP and CFU transfers never overlap. */
+    g_u8CfuInBuf[0] = REPORT_ID_ISP_INPUT;
+    memcpy(g_u8CfuInBuf + 1, g_au8IspResp, EPA_MAX_PKT_SIZE - 1);
+    g_u32CfuInLen = EPA_MAX_PKT_SIZE;
+
+    for (i = 0; i < g_u32CfuInLen; i++)
+        HSUSBD->EP[EPA].EPDAT_BYTE = g_u8CfuInBuf[i];
+    HSUSBD->EP[EPA].EPTXCNT = g_u32CfuInLen;
+    HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
 }
 
 /*--------------------------------------------------------------------------*/

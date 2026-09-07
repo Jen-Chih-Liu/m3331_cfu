@@ -53,6 +53,18 @@ static uint8_t g_CfuVirtualHid_HidReportDescriptor[] =
     0x09, VERSIONS_FEATURE_USAGE,       // USAGE(0x42)
     0xB2, 0x02, 0x01,                   // FEATURE(0x02)
 
+    0x85, REPORT_ID_ISP_INPUT,          // REPORT_ID(41) - ISP response
+    0x75, 0x08,                         // REPORT SIZE(8)
+    0x95, ISP_REPORT_LENGTH,            // REPORT COUNT(63)
+    0x09, ISP_INPUT_USAGE,              // USAGE(0x61)
+    0x81, 0x02,                         // INPUT(0x02)
+
+    0x85, REPORT_ID_ISP_OUTPUT,         // REPORT_ID(40) - ISP command
+    0x75, 0x08,                         // REPORT SIZE(8)
+    0x95, ISP_REPORT_LENGTH,            // REPORT COUNT(63)
+    0x09, ISP_OUTPUT_USAGE,             // USAGE(0x60)
+    0x91, 0x02,                         // OUTPUT(0x02)
+
     0xC0                                // END_COLLECTION()
 };
 

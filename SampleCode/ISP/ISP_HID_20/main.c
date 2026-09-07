@@ -110,16 +110,17 @@ int32_t SYS_Init(void)
 }
 
 /*---------------------------------------------------------------------------------------------------------*/
-/* AP boot slot layout (per 128 KB bank, matching gen_checksum_bin.py)                                     */
-/*   bank_base + 0x1FFF0  [4B]  FW_VERSION                                                                 */
-/*   bank_base + 0x1FFF8  [4B]  FW_CHECKSUM — 32-bit byte-sum of entire 128 KB image                      */
+/* AP boot slot layout (per 124 KB bank, matching gen_checksum_bin.py)                                     */
+/*   bank_base + 0x1EFF0  [4B]  FW_VERSION                                                                 */
+/*   bank_base + 0x1EFF8  [4B]  FW_CHECKSUM — 32-bit byte-sum of entire 124 KB image                      */
 /*                               (checksum slot bytes treated as 0x00 during computation)                  */
+/*   Flash map: AP0 0x00000-0x1EFFF | AP1 0x1F000-0x3DFFF | Calib 0x3E000 | OEM 0x3F000                    */
 /*---------------------------------------------------------------------------------------------------------*/
 #define AP0_BASE       0x00000UL
-#define AP1_BASE       0x20000UL
-#define AP_BANK_SIZE   0x20000UL   /* 128 KB per bank */
-#define AP_VER_OFFSET  0x1FFF0UL   /* FW_VERSION offset from bank start */
-#define AP_CHK_OFFSET  0x1FFF8UL   /* FW_CHECKSUM offset from bank start */
+#define AP1_BASE       0x1F000UL
+#define AP_BANK_SIZE   0x1F000UL   /* 124 KB per bank */
+#define AP_VER_OFFSET  0x1EFF0UL   /* FW_VERSION offset from bank start */
+#define AP_CHK_OFFSET  0x1EFF8UL   /* FW_CHECKSUM offset from bank start */
 
 /**
  * Boot_ChecksumOK — returns 1 if the 32-bit byte-sum checksum stored at
@@ -187,10 +188,20 @@ int main(void)
     CLK->AHBCLK0 |= CLK_AHBCLK0_ISPCKEN_Msk;
     FMC->ISPCTL |= FMC_ISPCTL_ISPEN_Msk | FMC_ISPCTL_APUEN_Msk | FMC_ISPCTL_DFUEN_Msk | FMC_ISPCTL_ISPFF_Msk;
 
-    /* Get APROM and Data Flash size */
-    g_u32ApromSize = 128*1024;
-    g_u32DataFlashAddr = 0x20000;
-    g_u32DataFlashSize = 128*1024;
+	
+	    if ((inpw(&SYS->RSTSTS) & 0x3) == 0x00) //check reset flag and por flag is clear
+    {
+        goto _LDROM_LOOP;
+    }
+	
+    /* AP bank layout for USB ISP fallback path (matches CFU 124 KB dual bank). *
+     * AP0 = 0x00000-0x1EFFF, AP1 = 0x1F000-0x3DFFF (each 124 KB).              *
+     * g_u32ApromSize spans BOTH banks (AP0 + AP1 = 0x3E000, 248 KB).           *
+     * Calibration (0x3E000) / OEM config (0x3F000) sit above the APROM window  *
+     * so a CMD_UPDATE_APROM / CMD_ERASE_ALL erase preserves them.               */
+    g_u32ApromSize = 0x3E000;        /* AP0 + AP1 = 248 KB */
+    g_u32DataFlashAddr = 0x3E000;    /* Calib/OEM start — APROM erase stops here */
+    g_u32DataFlashSize = 0;          /* no separate data flash; Calib/OEM preserved */
 
     /* ----------------------------------------------------------------------- *
      * Boot decision: verify AP0 and AP1 checksums (gen_checksum_bin.py         *
@@ -234,7 +245,7 @@ int main(void)
         }
         /* else: both checksums invalid — fall through to USB ISP update */
     }
-
+_LDROM_LOOP:
     /* Open HSUSBD controller */
     HSUSBD_Open(NULL, NULL, NULL);
 

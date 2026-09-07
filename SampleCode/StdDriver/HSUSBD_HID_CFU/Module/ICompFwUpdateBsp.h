@@ -67,3 +67,26 @@ INT32 ICompFwUpdateBspAuthenticateFWImage(void);
 //                  system know a new image has been downloaded and verified. (ex: this
 //                  could be where the boot loader is modified to point to the new image )
 void ICompFwUpdateBspSignalUpdateComplete(void);
+
+/*---------------------------------------------------------------------------------------------------------*/
+/* Calibration data / OEM config region access                                                             */
+/*                                                                                                         */
+/*   Calibration data : 0x3E000 - 0x3EFFF (4 KB)                                                           */
+/*   OEM config       : 0x3F000 - 0x3FFFF (4 KB)                                                           */
+/*                                                                                                         */
+/* These regions live OUTSIDE the A/B firmware banks and are never touched by the CFU update path.         */
+/* All <offset> arguments are relative to the region base (0 .. region_size - 1).                          */
+/* Flash can only clear bits, so a region must be erased before it can be (re)written.                     */
+/*---------------------------------------------------------------------------------------------------------*/
+#define CFU_CALIB_REGION_SIZE   (0x1000U)   /* 4 KB */
+#define CFU_OEM_REGION_SIZE     (0x1000U)   /* 4 KB */
+
+/* Calibration data region (0x3E000) */
+UINT32 ICompFwUpdateBspCalibErase(void);
+UINT32 ICompFwUpdateBspCalibWrite(UINT32 offset, const UINT8 *pData, UINT16 length);
+UINT32 ICompFwUpdateBspCalibRead(UINT32 offset, UINT8 *pData, UINT16 length);
+
+/* OEM config region (0x3F000) */
+UINT32 ICompFwUpdateBspOemErase(void);
+UINT32 ICompFwUpdateBspOemWrite(UINT32 offset, const UINT8 *pData, UINT16 length);
+UINT32 ICompFwUpdateBspOemRead(UINT32 offset, UINT8 *pData, UINT16 length);

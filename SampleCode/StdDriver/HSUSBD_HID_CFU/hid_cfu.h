@@ -33,4 +33,15 @@
 #define FEATURE_REPORT_LENGTH       60
 #define VERSIONS_FEATURE_USAGE      0x42
 
+/*---------------------------------------------------------------------------*/
+/* USB HID ISP protocol channel (coexists with CFU on the same interface)    */
+/*   Carries the Nuvoton 64-byte ISP packet inside a dedicated Report ID.     */
+/*   Report ID consumes byte 0, leaving 63 payload bytes per packet.          */
+/*---------------------------------------------------------------------------*/
+#define REPORT_ID_ISP_OUTPUT        40      /* host -> device (interrupt OUT) */
+#define REPORT_ID_ISP_INPUT         41      /* device -> host (interrupt IN)  */
+#define ISP_REPORT_LENGTH           63      /* payload bytes after Report ID  */
+#define ISP_OUTPUT_USAGE            0x60
+#define ISP_INPUT_USAGE             0x61
+
 #endif  /* __USBD_HID_CFU_H__ */

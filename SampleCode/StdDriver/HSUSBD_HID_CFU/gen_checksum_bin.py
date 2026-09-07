@@ -6,11 +6,11 @@ Calculates the 32-bit byte sum of the padded firmware image (with the
 checksum slot zeroed), writes the result at offset (ROM_SIZE - 8), and
 saves a new file as  <original_name>_sum.bin.
 
-Flash layout for the last 16 bytes of each 128 KB bank (0x20000):
-  Offset 0x1FFF0  [4 bytes]  FW_VERSION  (.fw_version section, g_FwVersion)
-  Offset 0x1FFF4  [4 bytes]  (unused / 0xFF)
-  Offset 0x1FFF8  [4 bytes]  FW_CHECKSUM  ← written by this script
-  Offset 0x1FFFC  [4 bytes]  (unused / 0xFF)
+Flash layout for the last 16 bytes of each 124 KB bank (0x1F000):
+  Offset 0x1EFF0  [4 bytes]  FW_VERSION  (.fw_version section, g_FwVersion)
+  Offset 0x1EFF4  [4 bytes]  (unused / 0xFF)
+  Offset 0x1EFF8  [4 bytes]  FW_CHECKSUM  ← written by this script
+  Offset 0x1EFFC  [4 bytes]  (unused / 0xFF)
 
 Algorithm
 ---------
@@ -22,11 +22,11 @@ Algorithm
 
 Usage
 -----
-  # Default: ROM_SIZE = 0x20000, output = HSUSBD_HID_CFU_sum.bin
+  # Default: ROM_SIZE = 0x1F000, output = HSUSBD_HID_CFU_sum.bin
   python gen_checksum_bin.py Keil/obj/HSUSBD_HID_CFU.bin
 
   # Explicit ROM size and output path
-  python gen_checksum_bin.py Keil/obj/HSUSBD_HID_CFU.bin --rom-size 0x20000 --output out.bin
+  python gen_checksum_bin.py Keil/obj/HSUSBD_HID_CFU.bin --rom-size 0x1F000 --output out.bin
 
   # Show info only (no output written)
   python gen_checksum_bin.py Keil/obj/HSUSBD_HID_CFU.bin --info
@@ -40,7 +40,7 @@ import sys
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-DEFAULT_ROM_SIZE = 0x20000          # 128 KB — matches AP0/AP1 bank size
+DEFAULT_ROM_SIZE = 0x1F000          # 124 KB — matches AP0/AP1 bank size
 CHECKSUM_OFFSET_FROM_END = 8       # FW_CHECKSUM is at ROM_SIZE - 8
 
 
@@ -57,7 +57,7 @@ def compute_and_embed(bin_path: str, rom_size: int, output: str, info_only: bool
         raw = bytearray(f.read())
 
     file_size = len(raw)
-    chk_offset = rom_size - CHECKSUM_OFFSET_FROM_END   # 0x1FFF8 for 128 KB
+    chk_offset = rom_size - CHECKSUM_OFFSET_FROM_END   # 0x1EFF8 for 124 KB
 
     if chk_offset < 0 or chk_offset + 4 > rom_size:
         print(f"[!] Checksum offset 0x{chk_offset:X} is out of range for ROM_SIZE 0x{rom_size:X}")
@@ -72,7 +72,7 @@ def compute_and_embed(bin_path: str, rom_size: int, output: str, info_only: bool
         raw = raw[:rom_size]
 
     # Print current FW_VERSION for reference (offset ROM_SIZE - 16)
-    ver_offset = rom_size - 16      # 0x1FFF0
+    ver_offset = rom_size - 16      # 0x1EFF0
     fw_ver = struct.unpack_from("<I", raw, ver_offset)[0]
     print(f"[*] FW_VERSION  @ 0x{ver_offset:05X} : 0x{fw_ver:08X}"
           f"  (major=0x{(fw_ver>>24)&0xFF:02X}"
@@ -127,7 +127,7 @@ def main():
     parser.add_argument(
         "--rom-size", type=lambda x: int(x, 0), default=DEFAULT_ROM_SIZE,
         metavar="SIZE",
-        help=f"ROM bank size in bytes (default: 0x{DEFAULT_ROM_SIZE:X} = 128 KB)"
+        help=f"ROM bank size in bytes (default: 0x{DEFAULT_ROM_SIZE:X} = 124 KB)"
     )
     parser.add_argument(
         "--output", type=str, default=None,

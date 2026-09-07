@@ -14,10 +14,10 @@ Version source priority (highest → lowest)
                                    AP0_OFFSET.sct / AP1_OFFSET.sct both place g_FwVersion
                                    (.fw_version section) at  ROM_BASE + ROM_SIZE - 0x10.
                                    So the correct --version-offset is:
-                                     AP0 binary: 0x1FFF0  (ROM base 0x00000, ROM size 0x20000,
-                                                          16 bytes from end = 0x1FFF0)
-                                     AP1 binary: 0x1FFF0  (ROM base 0x20000, ROM size 0x20000,
-                                                          objcopy strips base, so file offset = 0x1FFF0)
+                                     AP0 binary: 0x1EFF0  (ROM base 0x00000, ROM size 0x1F000,
+                                                          16 bytes from end = 0x1EFF0)
+                                     AP1 binary: 0x1EFF0  (ROM base 0x1F000, ROM size 0x1F000,
+                                                          objcopy strips base, so file offset = 0x1EFF0)
 3. auto-detect from C source      (reads FW_VERSION_VALUE or *pVersion literal)
    then bump major byte + 1
 
@@ -38,9 +38,9 @@ Usage
   # Force immediate reset after update
   python gen_offer_bin.py --force-reset
 
-  # Read version from compiled .bin (g_FwVersion is at ROM_SIZE-16, offset 0x1FFF0 for 128 KB bank)
+  # Read version from compiled .bin (g_FwVersion is at ROM_SIZE-16, offset 0x1EFF0 for 124 KB bank)
   # Prerequisite: scatter file FW_VERSION section must exist (AP0/AP1_OFFSET.sct already has it)
-  python gen_offer_bin.py --fw-bin Keil/obj/HSUSBD_HID_CFU.bin --version-offset 0x1FFF0
+  python gen_offer_bin.py --fw-bin Keil/obj/HSUSBD_HID_CFU.bin --version-offset 0x1EFF0
 
   # Show current info only
   python gen_offer_bin.py --info
@@ -267,9 +267,9 @@ def main():
         help="Path to compiled firmware .bin file to read current version from"
     )
     parser.add_argument(
-        "--version-offset", type=lambda x: int(x, 0), default=0x1FFF0,
+        "--version-offset", type=lambda x: int(x, 0), default=0x1EFF0,
         metavar="OFFSET",
-        help="Byte offset of version uint32 inside --fw-bin (default: 0x1FFF0 = ROM_SIZE-16 of 128 KB bank)"
+        help="Byte offset of version uint32 inside --fw-bin (default: 0x1EFF0 = ROM_SIZE-16 of 124 KB bank)"
     )
     parser.add_argument(
         "--token", type=lambda x: int(x, 0), default=DEFAULT_TOKEN,
@@ -335,7 +335,7 @@ def main():
     if src_info["fw_version_macro"] is not None:
         print(f"    #define FW_VERSION_VALUE      : {version_to_str(src_info['fw_version_macro'])}")
         print(f"    (g_FwVersion placed at ROM_BASE + ROM_SIZE - 0x10  via scatter FW_VERSION section)")
-        print(f"    (binary file offset: 0x1FFF0 for 128 KB bank)")
+        print(f"    (binary file offset: 0x1EFF0 for 124 KB bank)")
     else:
         print("    #define FW_VERSION_VALUE      : (not found — scatter section not configured yet)")
 

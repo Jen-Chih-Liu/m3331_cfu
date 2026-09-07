@@ -12,6 +12,7 @@
 #include "hid_transfer.h"
 #include "ComponentFwUpdate.h"
 #include "IComponentFirmwareUpdate.h"
+#include "isp_cmd.h"
 
 /*---------------------------------------------------------------------------------------------------------*/
 /* Globals                                                                                                 */
@@ -95,6 +96,45 @@ void UART0_Init(void)
 }
 
 /*---------------------------------------------------------------------------------------------------------*/
+/*  Hand control over to the LDROM ISP bootloader (direct vector remap + jump) */
+/*---------------------------------------------------------------------------------------------------------*/
+static void ISP_JumpToLdrom(void)
+{
+    volatile uint32_t d;
+    uint32_t u32Sp, u32Pc;
+
+    /* Let the host read the ISP acknowledgement before USB drops. */
+    for (d = 0; d < 0x800000; d++) {}
+
+    printf("Jumping to LDROM ISP bootloader...\n");
+
+    /* Stop peripherals we started and force a USB disconnect so the host
+     * re-enumerates the LDROM ISP device. Interrupts stay globally enabled
+     * (no reset) so the LDROM bootloader's USB IRQ can fire once it re-inits. */
+    NVIC_DisableIRQ(USBD20_IRQn);
+    NVIC_DisableIRQ(TMR0_IRQn);
+    HSUSBD_SET_SE0();
+    for (d = 0; d < 0x200000; d++) {}
+
+    /* Remap the LDROM to the vector page and branch to its reset handler. */
+    SYS_UnlockReg();
+		outpw(&SYS->RSTSTS, 3);//clear power and reset flag for keep ldrom boot
+    FMC_Open();
+    FMC_SetVectorPageAddr(FMC_LDROM_BASE);
+	  NVIC_SystemReset();
+#if 0
+			
+    u32Sp = FMC_Read(FMC_LDROM_BASE);
+    u32Pc = FMC_Read(FMC_LDROM_BASE + 4);
+
+    __set_MSP(u32Sp);
+    ((void (*)(void))u32Pc)();
+#endif
+    /* Should never return. */
+    while (1) {}
+}
+
+/*---------------------------------------------------------------------------------------------------------*/
 /*  Main Function                                                                                          */
 /*---------------------------------------------------------------------------------------------------------*/
 int32_t main(void)
@@ -157,6 +197,19 @@ int32_t main(void)
     while (1)
     {
         /* Main loop: CFU processing is driven by USB interrupts */
+        if (g_u8JumpLdromPending)
+        {
+            ISP_JumpToLdrom();
+        }
+
+        if (g_u8JumpApromPending)
+        {
+            volatile uint32_t d;
+            for (d = 0; d < 0x800000; d++) {}
+            printf("Resetting to APROM...\n");
+            NVIC_SystemReset();
+        }
+
         if (g_u8ResetPending)
         {
             /* Give the host time to read the final SUCCESS report and

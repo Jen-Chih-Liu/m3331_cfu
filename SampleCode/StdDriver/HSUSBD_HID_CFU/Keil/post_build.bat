@@ -65,7 +65,7 @@ echo [3/4] gen_offer_bin.py: generating offer.bin ...
 python "%SCR_DIR%\gen_offer_bin.py" ^
     --component %COMP% ^
     --fw-bin "%SUM_FILE%" ^
-    --version-offset 0x1FFF0 ^
+    --version-offset 0x1EFF0 ^
     --no-bump ^
     --output "%OBJ_DIR%\%BIN_NAME%.offer.bin"
 if errorlevel 1 ( echo [ERROR] gen_offer_bin.py failed & exit /b 1 )

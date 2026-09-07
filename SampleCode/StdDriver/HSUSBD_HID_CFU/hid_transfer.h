@@ -99,5 +99,6 @@ void EPA_Handler(void);
 void EPB_Handler(void);
 void CFU_SetInReport(void);
 void CFU_GetOutReport(uint8_t *pu8EpBuf, uint32_t u32Size);
+void ISP_HandleOutReport(uint8_t *pu8Payload, uint32_t u32Len);
 
 #endif  /* __USBD_HID_H__ */

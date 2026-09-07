@@ -18,6 +18,7 @@
 #define CMD_READ_CONFIG             0x000000A2
 #define CMD_ERASE_ALL               0x000000A3
 #define CMD_SYNC_PACKNO             0x000000A4
+#define CMD_READ_APROM              0x000000A5
 #define CMD_GET_FWVER               0x000000A6
 #define CMD_RUN_APROM               0x000000AB
 #define CMD_RUN_LDROM               0x000000AC
@@ -32,6 +33,10 @@
 #define CMD_GET_FLASHMODE           0x000000CA
 
 #define CMD_RESEND_PACKET           0x000000FF
+
+/* Bytes of APROM returned per CMD_READ_APROM response (fits response[8..],
+ * word-aligned). The host advances the address by this amount each packet. */
+#define READ_APROM_CHUNK            48
 
 #define V6M_AIRCR_VECTKEY_DATA      0x05FA0000UL
 #define V6M_AIRCR_SYSRESETREQ       0x00000004UL

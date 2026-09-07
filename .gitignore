@@ -1,0 +1,58 @@
+# ============================================================
+#  m3331_cfu .gitignore
+#  Note: the top-level out/ folder (prebuilt binaries + tools)
+#  is intentionally KEPT in the repo (see the "!out/" rules).
+# ============================================================
+
+# ---- CMake / MSVC build output (HID_ISP_TOOL) ----
+isp_app/HID_ISP_TOOL/build/
+**/CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# ---- Keil MDK intermediate / user-specific files ----
+**/obj/
+**/lst/
+*.uvguix.*
+*.scvd
+Nu_Link_Driver.ini
+*.dep
+*.bak
+*.__i
+*.crf
+*.d
+*.o
+*.axf
+*.htm
+*.lnp
+*.map
+*.iex
+*.sct
+*.tra
+*.lst
+
+# ---- Build tool logs ----
+*.log
+
+# ---- Compiled objects / libraries (general) ----
+*.obj
+*.lib
+*.exp
+*.ilk
+*.pdb
+
+# ---- OS / editor cruft ----
+Thumbs.db
+Desktop.ini
+.vscode/
+.DS_Store
+
+# ============================================================
+#  Keep the prebuilt out/ folder tracked
+# ============================================================
+!out/
+!out/**

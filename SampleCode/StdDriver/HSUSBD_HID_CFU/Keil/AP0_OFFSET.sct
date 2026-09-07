@@ -12,7 +12,7 @@
 ; </h>
  *----------------------------------------------------------------------------*/
 #define __ROM_BASE      0x00000000
-#define __ROM_SIZE      0x00020000
+#define __ROM_SIZE      0x0001F000
 
 /*--------------------- Embedded RAM Configuration ---------------------------
 ; <h> RAM Configuration
@@ -79,18 +79,18 @@ LR_ROM __RO_BASE __RO_SIZE  {                       ; load region size_region
 }
 
 ; Separate load region — forces load base = execution base = (ROM_BASE + ROM_SIZE - 0x10)
-; so that fromelf --bin places the FW_VERSION word at binary offset 0x1FFF0.
+; so that fromelf --bin places the FW_VERSION word at binary offset 0x1EFF0.
 ;
 ; Firmware version word — fixed at ROM_SIZE - 16 bytes.
-;   AP0 flash address : 0x00000 + 0x20000 - 0x10 = 0x1FFF0
-;   Binary file offset: 0x1FFF0  (fromelf strips the load-region base address)
-; gen_offer_bin.py reads this with: --fw-bin <file> --version-offset 0x1FFF0
+;   AP0 flash address : 0x00000 + 0x1F000 - 0x10 = 0x1EFF0
+;   Binary file offset: 0x1EFF0  (fromelf strips the load-region base address)
+; gen_offer_bin.py reads this with: --fw-bin <file> --version-offset 0x1EFF0
 ;
 ; Flash layout for the last 16 bytes:
-;   0x1FFF0 [4 bytes] FW_VERSION  (.fw_version section, g_FwVersion)
-;   0x1FFF4 [4 bytes] (unused / 0xFF)
-;   0x1FFF8 [4 bytes] FW_CHECKSUM (written by gen_checksum_bin.py post-build)
-;   0x1FFFC [4 bytes] (unused / 0xFF)
+;   0x1EFF0 [4 bytes] FW_VERSION  (.fw_version section, g_FwVersion)
+;   0x1EFF4 [4 bytes] (unused / 0xFF)
+;   0x1EFF8 [4 bytes] FW_CHECKSUM (written by gen_checksum_bin.py post-build)
+;   0x1EFFC [4 bytes] (unused / 0xFF)
 LR_FW_VER (__RO_BASE + __RO_SIZE - 0x10) 0x10  {
   FW_VERSION (__RO_BASE + __RO_SIZE - 0x10) 0x4  {
    *(.fw_version)

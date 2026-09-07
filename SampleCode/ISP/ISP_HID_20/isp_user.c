@@ -50,6 +50,69 @@ static uint16_t CalCheckSum(uint32_t u32start, uint32_t u32len)
     return u16lcksum;
 }
 
+/*---------------------------------------------------------------------------------------------------------*/
+/* AP boot slot layout (mirrors main.c / gen_checksum_bin.py)                                              */
+/*   AP0 0x00000-0x1EFFF | AP1 0x1F000-0x3DFFF (each 124 KB)                                               */
+/*   bank_base + 0x1EFF0 [4B] FW_VERSION | bank_base + 0x1EFF8 [4B] FW_CHECKSUM (32-bit byte-sum)          */
+/*---------------------------------------------------------------------------------------------------------*/
+#define AP0_BASE        0x00000UL
+#define AP1_BASE        0x1F000UL
+#define AP_VER_OFFSET   0x1EFF0UL
+#define AP_CHK_OFFSET   0x1EFF8UL
+
+/* Returns 1 if the 32-bit byte-sum stored at (u32Base + AP_CHK_OFFSET) matches
+ * the computed byte-sum of the bank (checksum slot excluded); 0 otherwise. */
+static int RunApChecksumOK(uint32_t u32Base)
+{
+    uint32_t u32Addr;
+    uint32_t u32Sum     = 0;
+    uint32_t u32ChkAddr = u32Base + AP_CHK_OFFSET;
+    uint32_t u32Stored  = 0;
+
+    FMC_Read_User(u32ChkAddr, &u32Stored);
+
+    if(u32Stored == 0xFFFFFFFFUL)
+        return 0;
+
+    for(u32Addr = u32Base; u32Addr < u32ChkAddr; u32Addr += 4)
+    {
+        uint32_t u32Word = 0;
+        FMC_Read_User(u32Addr, &u32Word);
+        u32Sum += (u32Word         & 0xFFUL);
+        u32Sum += ((u32Word >>  8)  & 0xFFUL);
+        u32Sum += ((u32Word >> 16)  & 0xFFUL);
+        u32Sum += ((u32Word >> 24)  & 0xFFUL);
+    }
+
+    return (u32Sum == u32Stored) ? 1 : 0;
+}
+
+/* Selects the AP bank to run, mirroring the power-on boot decision in main():
+ * both valid → newer FW_VERSION (tie → AP1); one valid → that bank;
+ * none valid → AP0 (best effort). */
+static uint32_t RunApSelectBank(void)
+{
+    int      ap0_ok = RunApChecksumOK(AP0_BASE);
+    int      ap1_ok = RunApChecksumOK(AP1_BASE);
+    uint32_t ver0   = 0;
+    uint32_t ver1   = 0;
+
+    if(ap0_ok && ap1_ok)
+    {
+        FMC_Read_User(AP0_BASE + AP_VER_OFFSET, &ver0);
+        FMC_Read_User(AP1_BASE + AP_VER_OFFSET, &ver1);
+        if(ver0 == 0xFFFFFFFFUL) ver0 = 0;
+        if(ver1 == 0xFFFFFFFFUL) ver1 = 0;
+        return (ver1 >= ver0) ? AP1_BASE : AP0_BASE;
+    }
+    else if(ap1_ok)
+    {
+        return AP1_BASE;
+    }
+
+    return AP0_BASE;
+}
+
 int ParseCmd(uint8_t *pu8Buffer, uint8_t u8len)
 {
     static uint32_t u32StartAddress, u32StartAddress_bak, u32TotalLen, u32TotalLen_bak, u32LastDataLen, u32PackNo = 1;
@@ -89,18 +152,41 @@ int ParseCmd(uint8_t *pu8Buffer, uint8_t u8len)
         outpw((uint32_t)(pu8Response + 8), SYS->PDID);
         goto out;
     }
-    else if(u32Lcmd == CMD_RUN_APROM || u32Lcmd == CMD_RUN_LDROM || u32Lcmd == CMD_RESET)
+    else if(u32Lcmd == CMD_READ_APROM)
+    {
+        /* Read READ_APROM_CHUNK bytes of APROM starting at the address in the
+         * request payload ([8..11]) into the response data area ([8..]).
+         * The host iterates over the whole image to dump it. */
+        u32PageAddress = inpw((uint32_t)pu8Src);
+        ReadData(u32PageAddress, u32PageAddress + READ_APROM_CHUNK,
+                 (uint32_t *)(uint32_t)(pu8Response + 8));
+        goto out;
+    }
+    else if(u32Lcmd == CMD_RUN_APROM)
+    {
+        /* Jump into the application the same way the power-on boot path does
+         * (see Boot_JumpToAP in main.c): remap the vector page to the selected
+         * AP bank and issue a system reset.
+         *
+         * A plain software reset (clearing BS + SYSRESETREQ) would re-enter the
+         * LDROM, which then stays in the ISP loop because the POR/PIN reset
+         * flags are clear — see the "RSTSTS & 0x3 == 0 -> _LDROM_LOOP"
+         * short-circuit in main().  Remapping VECMAP instead makes the CPU boot
+         * straight into the AP reset vector, bypassing the LDROM entirely. */
+        FMC_SetVectorPageAddr(RunApSelectBank());
+        NVIC_SystemReset();
+
+        /* Trap the CPU */
+        while(1);
+    }
+    else if(u32Lcmd == CMD_RUN_LDROM || u32Lcmd == CMD_RESET)
     {
         /* Clear POR and Reset Pin reset flag */
         SYS_CLEAR_RST_SOURCE(SYS_RSTSTS_PORF_Msk);
         SYS_CLEAR_RST_SOURCE(SYS_RSTSTS_PINRF_Msk);
 
         /* Set BS */
-        if(u32Lcmd == CMD_RUN_APROM)
-        {
-            u32i = (FMC->ISPCTL & 0xFFFFFFFC);
-        }
-        else if(u32Lcmd == CMD_RUN_LDROM)
+        if(u32Lcmd == CMD_RUN_LDROM)
         {
             u32i = (FMC->ISPCTL & 0xFFFFFFFC);
             u32i |= 0x00000002;

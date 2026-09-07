@@ -50,7 +50,7 @@ Environment:
 
 /* ACTIVE_BANK is set in the Keil target preprocessor:
  *   Target "AP0": ACTIVE_BANK=0  (firmware loaded at 0x00000, writes CFU to AP1)
- *   Target "AP1": ACTIVE_BANK=1  (firmware loaded at 0x20000, writes CFU to AP0)
+ *   Target "AP1": ACTIVE_BANK=1  (firmware loaded at 0x1F000, writes CFU to AP0)
  */
 #ifndef ACTIVE_BANK
 #define ACTIVE_BANK 0
@@ -190,14 +190,14 @@ void TMR0_IRQHandler(void)
 
 /*---------------------------------------------------------------------------------------------------------*/
 /* Firmware version — placed at ROM_SIZE - 16 bytes via scatter file section .fw_version.                 */
-/*   AP0: flash 0x1FFF0, binary offset 0x1FFF0                                                             */
-/*   AP1: flash 0x3FFF0, binary offset 0x1FFF0 (objcopy strips base)                                      */
+/*   AP0: flash 0x1EFF0, binary offset 0x1EFF0                                                             */
+/*   AP1: flash 0x3DFF0, binary offset 0x1EFF0 (objcopy strips base)                                      */
 /* Flash tail layout:                                                                                      */
-/*   0x1FFF0 [4B] FW_VERSION  (this variable)                                                              */
-/*   0x1FFF4 [4B] (unused / 0xFF)                                                                          */
-/*   0x1FFF8 [4B] FW_CHECKSUM (written post-build by gen_checksum_bin.py)                                  */
-/*   0x1FFFC [4B] (unused / 0xFF)                                                                          */
-/* gen_offer_bin.py: --fw-bin <file> --version-offset 0x1FFF0                                              */
+/*   0x1EFF0 [4B] FW_VERSION  (this variable)                                                              */
+/*   0x1EFF4 [4B] (unused / 0xFF)                                                                          */
+/*   0x1EFF8 [4B] FW_CHECKSUM (written post-build by gen_checksum_bin.py)                                  */
+/*   0x1EFFC [4B] (unused / 0xFF)                                                                          */
+/* gen_offer_bin.py: --fw-bin <file> --version-offset 0x1EFF0                                              */
 /*---------------------------------------------------------------------------------------------------------*/
 #define FW_VERSION_VALUE   0x03000002u
 
@@ -272,7 +272,7 @@ MCU_STATUS NotifySuccessImpl(BOOL forceReset, READ_FIRMWARE_FUNC readHandler,
 #if ACTIVE_BANK == 0
      /* Running AP0 → boot AP1 on next reset */
 	
-	 FMC_SetVectorPageAddr(0x20000);
+	 FMC_SetVectorPageAddr(0x1F000);
 	
 #else
 	 /* Running AP1 → boot AP0 on next reset */
