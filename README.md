@@ -53,7 +53,7 @@ M3331 APROM 共 256 KB，分為兩個 124 KB 應用 Bank，外加校準與 OEM �
 每個 Bank 末端存放版本與 Checksum：
 
 - `bank_base + 0x1EFF0` [4B] **FW_VERSION**
-- `bank_base + 0x1EFF8` [4B] **FW_CHECKSUM**（整個 124 KB 影像的 32-bit byte-sum，Checksum 槽本身以 0 計）
+- `bank_base + 0x1EFF8` [4B] **FW_CHECKSUM**（32-bit byte-sum，計算範圍為各 Bank `+0x00000` 至 `+0x1EFF7` 共 `0x1EFF8` 位元組，不含 Checksum 槽及後續填充位元組）
 
 > ISP 更新目標涵蓋 AP0 + AP1 共 248 KB（`0x00000`–`0x3DFFF`）；Calibration / OEM 位於 APROM 視窗之上，抹除時會被保留。
 

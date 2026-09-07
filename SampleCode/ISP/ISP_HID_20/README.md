@@ -63,7 +63,7 @@ ISP_HID_20/
 ```
 Bank 末端 16 bytes 配置（相對於各 Bank 起始）
   +0x1EFF0  [4 bytes]  FW_VERSION   韌體版本
-  +0x1EFF8  [4 bytes]  FW_CHECKSUM  32-bit byte-sum（slot 計算時視為 0）
+  +0x1EFF8  [4 bytes]  FW_CHECKSUM  32-bit byte-sum（計算範圍為 +0x00000 至 +0x1EFF7，不含 Checksum 槽及後續 4 bytes）
 ```
 
 | 區塊 | 起始位址 | 大小 | 版本 offset | Checksum offset |
@@ -113,22 +113,22 @@ Bank 末端 16 bytes 配置（相對於各 Bank 起始）
 | 命令 | 值 | 說明 |
 |------|----|------|
 | `CMD_UPDATE_APROM` | `0xA0` | 更新 APROM |
-| `CMD_UPDATE_CONFIG` | `0xA1` | 更新 CONFIG |
+| `CMD_UPDATE_CONFIG` | `0xA1` | 更新 CONFIG（韌體內預設 `#if 0` 停用）|
 | `CMD_READ_CONFIG` | `0xA2` | 讀取 CONFIG |
 | `CMD_ERASE_ALL` | `0xA3` | 抹除全部 APROM |
 | `CMD_SYNC_PACKNO` | `0xA4` | 同步封包序號 |
 | `CMD_READ_APROM` | `0xA5` | 讀取 APROM (每次回傳 `READ_APROM_CHUNK` = 48 bytes)，供主機 `--dump` 回讀 |
 | `CMD_GET_FWVER` | `0xA6` | 取得 ISP 版本 (0x32) |
-| `CMD_RUN_APROM` | `0xAB` | 依開機決策選定 AP Bank，重映射向量頁後重啟至 APROM（見下方註）|
+| `CMD_RUN_APROM` | `0xAB` | 依開機決策選定 AP Bank，重映射向量頁後重啟至 APROM（直接重置，不回傳 ACK；見下方註）|
 | `CMD_RUN_LDROM` | `0xAC` | 跳轉至 LDROM |
 | `CMD_RESET` | `0xAD` | 系統重置 |
 | `CMD_CONNECT` | `0xAE` | 建立連線 |
-| `CMD_DISCONNECT` | `0xAF` | 中斷連線 |
+| `CMD_DISCONNECT` | `0xAF` | 中斷連線（僅回傳 ACK，無其他動作）|
 | `CMD_GET_DEVICEID` | `0xB1` | 取得 Device ID |
 | `CMD_UPDATE_DATAFLASH` | `0xC3` | 更新 Data Flash |
-| `CMD_WRITE_CHECKSUM` | `0xC9` | 寫入 Checksum |
+| `CMD_WRITE_CHECKSUM` | `0xC9` | 寫入 Checksum（保留定義，`ParseCmd()` 內無特定動作）|
 | `CMD_GET_FLASHMODE` | `0xCA` | 取得 Flash 模式 |
-| `CMD_RESEND_PACKET` | `0xFF` | 重送封包 |
+| `CMD_RESEND_PACKET` | `0xFF` | 重送封包（韌體內預設 `#if 0` 停用）|
 
 > **`CMD_RUN_APROM` 的跳轉方式**：`main()` 在開機時會檢查「POR 與 PIN reset 旗標皆為 0」（`RSTSTS & 0x3 == 0`），若成立便直接 `goto _LDROM_LOOP` 停在 ISP 迴圈、**略過**跳轉 AP 的決策。因此 `CMD_RUN_APROM` 若只是清旗標後做純軟體重置，重啟後會被此短路困在 LDROM。為避免此問題，`CMD_RUN_APROM` 改採與冷開機相同的機制：以 `RunApSelectBank()` 選出 Checksum 有效且版本較新的 Bank，透過 `FMC_SetVectorPageAddr()` 重映射向量頁後 `NVIC_SystemReset()`，令 CPU 直接由 AP 的 reset vector 開機、繞過 LDROM。`CMD_RUN_LDROM` / `CMD_RESET` 則維持清旗標 + BS 位元 + 軟體重置。
 
@@ -176,7 +176,7 @@ Bank 末端 16 bytes 配置（相對於各 Bank 起始）
 ### 8.1 進入 LDROM ISP 的兩種路徑
 
 1. **冷開機 fallback**：開機時 AP0 與 AP1 的 Checksum 皆無效，`main()` 自動停留於 LDROM 進入 USB ISP 模式（見第 3 節）。
-2. **由 CFU 應用熱切換**：CFU 應用透過其 HID ISP 通道收到 `CMD_RUN_LDROM (0xAC)` 後，執行**直接向量重映射 + 分支**（不經系統重置）跳入本 LDROM 載入器。跳轉前 CFU 應用會停用 USB/Timer 中斷並強制 USB SE0 斷線，隨後本載入器重新初始化 HSUSBD 並以 PID `0x3F00` 重新列舉。
+2. **由 CFU 應用熱切換**：CFU 應用透過其 HID ISP 通道收到 `CMD_RUN_LDROM (0xAC)` 後，回傳 ACK 並延遲後斷開 USB（SE0），接著清除重置旗標（`outpw(&SYS->RSTSTS, 3)`）、重映射向量頁至 LDROM（`FMC_SetVectorPageAddr(FMC_LDROM_BASE)`）並呼叫 `NVIC_SystemReset()` 觸發系統重置。重啟後本載入器 `main()` 偵測到 `RSTSTS & 0x3 == 0`，直接進入 ISP 模式並以 PID `0x3F00` 重新列舉。
 
 > CFU 應用的 HID ISP 通道使用 Report ID `40`（Output）/ `41`（Input），封包內容為標準 ISP 格式。該通道僅提供資訊查詢與開機切換（讀版本、DeviceID、FlashMode、RUN_LDROM / RUN_APROM）；**APROM 的實際燒錄** 由本 LDROM 載入器的 `CMD_UPDATE_APROM` 或由 CFU 協議本身完成。
 
@@ -204,7 +204,7 @@ Bank 末端 16 bytes 配置（相對於各 Bank 起始）
 
 ### Q2：開機後一直停在 ISP 模式？
 
-代表 AP0 與 AP1 的 Checksum 皆無效。請確認 APROM 韌體末端的 FW_CHECKSUM (`+0x1EFF8`) 已正確寫入，且為整個 124 KB 影像的 32-bit byte-sum。
+代表 AP0 與 AP1 的 Checksum 皆無效。請確認 APROM 韌體末端的 FW_CHECKSUM (`+0x1EFF8`) 已正確寫入，且計算範圍為 `+0x00000` 至 `+0x1EFF7`（共 `0x1EFF8` 位元組）的 32-bit byte-sum。
 
 ### Q3：Checksum/版本 offset 與 CFU 範例一致嗎？
 
@@ -216,7 +216,7 @@ Bank 末端 16 bytes 配置（相對於各 Bank 起始）
 
 ### Q5：從 CFU 應用送出 `CMD_RUN_LDROM` 後找不到裝置？
 
-CFU 應用以直接分支（不經系統重置）跳入本 LDROM 載入器，跳轉後由本載入器重新初始化 HSUSBD 並以 PID `0x3F00` 重新列舉。主機需重新以 PID `0x3F00` 開啟裝置；若一直看不到，請確認 LDROM 已燒錄本載入器且 CONFIG 允許自 LDROM 啟動。
+CFU 應用會先清除重置旗標並重映射向量至 LDROM 後觸發 `NVIC_SystemReset()` 重啟，跳轉後由本載入器重新初始化 HSUSBD 並以 PID `0x3F00` 重新列舉。主機需重新以 PID `0x3F00` 開啟裝置；若一直看不到，請確認 LDROM 已燒錄本載入器且 CONFIG 允許自 LDROM 啟動。
 
 ### Q6：燒錄完成後裝置沒有自動跳到 APROM？
 

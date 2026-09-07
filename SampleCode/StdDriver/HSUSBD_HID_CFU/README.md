@@ -155,12 +155,12 @@ HID Report 使用專有 Usage Page，定義於 `hid_cfu.h`：
 └────────────┴────────────┴──────────┘
 ```
 
-例：`0x01000002` = Major 0x01 ，Minor 0x0000，Build 0x02
+例：`0x03000002` = Major 0x03 ，Minor 0x0000，Build 0x02
 
 版本常數定義於 `Module/ComponentFwUpdate.c`：
 
 ```c
-#define FW_VERSION_VALUE   0x01000002u
+#define FW_VERSION_VALUE   0x03000002u
 
 const uint32_t g_FwVersion __attribute__((section(".fw_version"), used)) = FW_VERSION_VALUE;
 ```
@@ -192,19 +192,22 @@ else
 
 | Target 名稱 | Preprocessor Define | Scatter 檔 | 說明 |
 |-------------|---------------------|-----------|------|
-| **AP0** | `ACTIVE_BANK=0` | `AP0_OFFSET.sct` | 燒錄至 0x00000，CFU 更新寫入 AP1 |
-| **AP1** | `ACTIVE_BANK=1` | `AP1_OFFSET.sct` | 燒錄至 0x1F000，CFU 更新寫入 AP0 |
+| **`HSUSBD_HID_CFU_AP0`** | `ACTIVE_BANK=0` | `AP0_OFFSET.sct` | 燒錄至 0x00000，CFU 更新寫入 AP1 |
+| **`HSUSBD_HID_CFU_AP1`** | `ACTIVE_BANK=1` | `AP1_OFFSET.sct` | 燒錄至 0x1F000，CFU 更新寫入 AP0 |
 
-> **首次燒錄**請選擇 **AP0** 目標，編譯後透過 Nu-Link 燒錄至 0x00000。
+> **首次燒錄**請選擇 **`HSUSBD_HID_CFU_AP0`** 目標，編譯後透過 Nu-Link 燒錄至 0x00000。
 
 ### 6.3 關鍵 Preprocessor 設定
 
-在 Keil `Options for Target` → `C/C++` → `Define` 中確認：
+在 Keil `Options for Target` → `C/C++` → `Define` 中確認各目標的預處理器定義：
 
 ```
-ACTIVE_BANK=0    ← AP0 目標
-ACTIVE_BANK=1    ← AP1 目標
+ACTIVE_BANK=0    ← HSUSBD_HID_CFU_AP0 目標
+ACTIVE_BANK=1    ← HSUSBD_HID_CFU_AP1 目標
 ```
+
+> [!WARNING]
+> **注意**：在 Keil 專案檔中，請特別確認 `HSUSBD_HID_CFU_AP1` 目標的 Define 必須包含 `ACTIVE_BANK=1`。若誤設為 0，AP1 運行時會將自身視為 AP0，導致 CFU 升級時覆寫目前正在執行的 Bank 1。
 
 ### 6.4 編譯輸出
 
@@ -282,10 +285,9 @@ Byte  14-15: Product ID (uint16 LE)
 ### 8.1 Checksum 演算法
 
 1. 將 `.bin` 補齊（或截斷）至 `ROM_SIZE`（124 KB），不足部分以 `0xFF` 填充。
-2. 將 offset `0x1EFF8` 的 4-byte Checksum slot 清零。
-3. 計算整個映像所有位元組的 **32-bit 加總** (`sum(all bytes) & 0xFFFFFFFF`)。
-4. 以 little-endian uint32 形式將結果寫回 offset `0x1EFF8`。
-5. 輸出新檔案 `<stem>_sum.bin`。
+2. 計算 offset `0x00000` 至 `0x1EFF7`（共 `0x1EFF8` 位元組）所有位元組的 **32-bit 加總** (`sum(raw[0:0x1EFF8]) & 0xFFFFFFFF`)。Checksum 槽（`0x1EFF8..0x1EFFB`）及尾端剩餘 padding（`0x1EFFC..0x1EFFF`）不計入加總，此範圍與 LDROM `Boot_ChecksumOK()` 完全一致。
+3. 以 little-endian uint32 形式將加總結果寫入 offset `0x1EFF8`。
+4. 輸出新檔案 `<stem>_sum.bin`。
 
 ### 8.2 常用指令
 
@@ -429,12 +431,12 @@ Host (Windows CFU Driver)              Device (m3331)
 #### 步驟 4：寫入完成驗證
 
 傳輸完成後，裝置執行：
-1. `ICompFwUpdateBspCalcCRC()` — 計算已寫入 Bank 的 Checksum
-2. `ICompFwUpdateBspAuthenticateFWImage()` — 驗證韌體合法性（目前直接回傳 pass）
+1. 查詢 CRC 偏移行為：`GetCrcOffsetImpl()` 回傳 `MCU_STATUS_CFU_CRC_CHECK_NOT_REQUIRED`，略過讀回 CRC 比對步驟（`ICompFwUpdateBspCalcCRC()` 函式保留備用）。
+2. `ICompFwUpdateBspAuthenticateFWImage()` — 驗證韌體合法性（目前直接回傳 pass）。
 
 #### 步驟 5：切換啟動 Bank 並重啟
 
-`NotifySuccessImpl()` 執行：
+`NotifySuccessImpl()` 切換啟動向量並標記重啟：
 
 ```c
 #if ACTIVE_BANK == 0
@@ -442,10 +444,12 @@ Host (Windows CFU Driver)              Device (m3331)
 #else
     FMC_SetVectorPageAddr(0x00000);  // 切換至 AP0
 #endif
-NVIC_SystemReset();
+    FMC_Close();
+
+    g_u8ResetPending = 1;            // 標記重啟需求，交由 main 迴圈延遲執行
 ```
 
-重啟後裝置以新韌體運行。
+`main()` 主迴圈偵測到 `g_u8ResetPending` 後，延遲一段時間讓主機順利讀取最後一個 content SUCCESS 回應封包，隨後呼叫 `NVIC_SystemReset()` 重啟，避免 USB 突然中斷導致主機報錯。重啟後裝置以新韌體運行。
 
 ### 11.3 升級逾時保護
 
@@ -549,7 +553,7 @@ Byte  8-.. : 回應資料 (版本 / DeviceID / FlashMode 等)
 
 ### 13.4 跳轉至 LDROM 流程
 
-`CMD_RUN_LDROM` 不會在中斷內立即跳轉，而是設定 `g_u8JumpLdromPending` 旗標，交由 `main()` 主迴圈的 `ISP_JumpToLdrom()` 執行**直接向量重映射 + 分支**（不經系統重置）：
+`CMD_RUN_LDROM` 不會在中斷內立即跳轉，而是設定 `g_u8JumpLdromPending` 旗標，先送出 ISP 回應（讓主機讀到 ACK），隨後交由 `main()` 主迴圈的 `ISP_JumpToLdrom()` 進行斷線與重置：
 
 ```c
 NVIC_DisableIRQ(USBD20_IRQn);          /* 停用 USB / TIMER 中斷 */
@@ -557,13 +561,13 @@ NVIC_DisableIRQ(TMR0_IRQn);
 HSUSBD_SET_SE0();                      /* 強制 USB 斷線，令主機重新枚舉 */
 
 SYS_UnlockReg();
+outpw(&SYS->RSTSTS, 3);                /* 清除 POR 與 PIN reset 標誌，確保 LDROM 開機停在 ISP 迴圈 */
 FMC_Open();
 FMC_SetVectorPageAddr(FMC_LDROM_BASE); /* 0x0F100000 重映射至向量頁 */
-__set_MSP(FMC_Read(FMC_LDROM_BASE));   /* 載入 LDROM 堆疊指標 */
-((void (*)(void))FMC_Read(FMC_LDROM_BASE + 4))();  /* 分支至 LDROM Reset Handler */
+NVIC_SystemReset();                    /* 系統重置開機進 LDROM */
 ```
 
-先送出 ISP 回應（讓主機讀到 ack），延遲一段時間後才斷線跳轉，避免控制傳輸中途中斷。
+重啟後，LDROM `main()` 偵測到 `(RSTSTS & 0x3) == 0`，略過 APROM Checksum 檢驗並直接進入 USB ISP 主迴圈（PID `0x3F00`），等待主機進行燒錄。
 
 ### 13.5 主機端相容性
 
@@ -621,14 +625,14 @@ HID_ISP_TOOL.exe --run-ldrom
 
 ### Q8：送出 `CMD_RUN_LDROM` 後主機找不到裝置？
 
-`ISP_JumpToLdrom()` 採直接分支（不經系統重置），跳轉後由 LDROM ISP Bootloader 重新初始化 USB。請確認 LDROM 內已燒錄可運作的 ISP Bootloader；若 LDROM 未完整重置周邊導致重新枚舉失敗，可改採 BS 位元 + `NVIC_SystemReset()` 方式跳轉。
+`ISP_JumpToLdrom()` 會先清除重置旗標、重映射向量頁至 LDROM 後執行 `NVIC_SystemReset()`。跳轉後由 LDROM ISP Bootloader 重新初始化 USB 並以 PID `0x3F00` 列舉。主機需重新開啟 PID `0x3F00` 裝置；若找不到，請確認 LDROM 已燒錄可運作的 ISP Bootloader 且 CONFIG 允許自 LDROM 啟動。
 
 ---
 
 ## 參考資料
 
 - [Microsoft CFU 協議規格](https://github.com/microsoft/CFU)
-- [CFU-1.0.0 CFU Driver & Protocol 文件](../../../../../../CFU-1.0.0/Documentation/)
+- [Microsoft CFU 開源專案與 Protocol 文件](https://github.com/microsoft/CFU)
 - [HID_ISP_TOOL 主機端 ISP 燒錄/查詢工具](../../../isp_app/HID_ISP_TOOL/README.md)
 - [ISP_HID_20 LDROM HID ISP 開機載入器](../../ISP/ISP_HID_20/README.md)
 - Nuvoton m3331 Technical Reference Manual

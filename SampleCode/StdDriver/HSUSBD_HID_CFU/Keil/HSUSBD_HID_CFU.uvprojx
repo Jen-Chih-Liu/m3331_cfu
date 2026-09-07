@@ -16,7 +16,7 @@
         <TargetCommonOption>
           <Device>M3334KIGAE</Device>
           <Vendor>Nuvoton</Vendor>
-          <PackID>Nuvoton.NuMicroM33_DFP.1.0.3</PackID>
+          <PackID>Nuvoton.NuMicroM33_DFP.1.0.2</PackID>
           <PackURL>https://github.com/OpenNuvoton/cmsis-packs/raw/master/Nuvoton_DFP/</PackURL>
           <Cpu>IRAM(0x20000000-0x2001FFFF) IROM(0-0x7FFFF) CLOCK(84000000) CPUTYPE("Cortex-M33") FPU2</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
@@ -483,7 +483,7 @@
         <TargetCommonOption>
           <Device>M3334KIGAE</Device>
           <Vendor>Nuvoton</Vendor>
-          <PackID>Nuvoton.NuMicroM33_DFP.1.0.3</PackID>
+          <PackID>Nuvoton.NuMicroM33_DFP.1.0.2</PackID>
           <PackURL>https://github.com/OpenNuvoton/cmsis-packs/raw/master/Nuvoton_DFP/</PackURL>
           <Cpu>IRAM(0x20000000-0x2001FFFF) IROM(0-0x7FFFF) CLOCK(84000000) CPUTYPE("Cortex-M33") FPU2</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
@@ -805,7 +805,7 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>ACTIVE_BANK=0</Define>
+              <Define>ACTIVE_BANK=1</Define>
               <Undefine></Undefine>
               <IncludePath>..\..\..\..\Library\CMSIS\Core\Include;..\;..\Module;..\..\..\..\Library\Device\Nuvoton\m3331\Config;..\..\..\..\Library\Device\Nuvoton\m3331\Include;..\..\..\..\Library\StdDriver\inc</IncludePath>
             </VariousControls>

@@ -6,8 +6,7 @@
 通讯，从 `.bin` 映像档烧录应用程式韧体（APROM）。由于使用系统内建的 HID 驱动，
 **无需**以 Zadig 更换成 WinUSB 驱动程式。
 
-本工具以 CMake 管理，并对齐 `ISP_HID_20` 命令协定，改写自
-[`MCU_CPLD_ISP/svf_usb_jtag.c`](../../MCU_CPLD_ISP) 的流程。
+本工具以 CMake 管理，并对齐 `ISP_HID_20` 命令协定。
 
 ## 功能
 
