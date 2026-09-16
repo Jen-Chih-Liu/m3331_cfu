@@ -188,20 +188,29 @@ int main(void)
     CLK->AHBCLK0 |= CLK_AHBCLK0_ISPCKEN_Msk;
     FMC->ISPCTL |= FMC_ISPCTL_ISPEN_Msk | FMC_ISPCTL_APUEN_Msk | FMC_ISPCTL_DFUEN_Msk | FMC_ISPCTL_ISPFF_Msk;
 
+    /* AP bank layout for USB ISP fallback path (matches CFU 124 KB dual bank). *
+     * AP0 = 0x00000-0x1EFFF, AP1 = 0x1F000-0x3DFFF (each 124 KB).              *
+     * g_u32ApromSize spans BOTH banks (AP0 + AP1 = 0x3E000, 248 KB).           *
+     * Calibration (0x3E000) / OEM config (0x3F000) sit above the APROM window  *
+     * so a CMD_UPDATE_APROM / CMD_ERASE_ALL erase preserves them.               *
+     *                                                                          *
+     * These MUST be set before the _LDROM_LOOP short-circuit below: when the   *
+     * bootloader is entered without a POR/PIN reset (e.g. the CFU app branches  *
+     * in via RUN_LDROM, or after CMD_RUN_APROM's NVIC_SystemReset), RSTSTS&0x3  *
+     * is 0 and we jump straight to the ISP loop.  If these globals were left at *
+     * their zero-init value, CMD_UPDATE_APROM would call EraseAP(base, 0) and   *
+     * erase nothing — the new image would then be programmed on top of the old  *
+     * one, silently corrupting every bit the new version needs to set (1->0     *
+     * only), which shows up as a checksum mismatch. */
+    g_u32ApromSize = 0x3E000;        /* AP0 + AP1 = 248 KB */
+    g_u32DataFlashAddr = 0x3E000;    /* Calib/OEM start — APROM erase stops here */
+    g_u32DataFlashSize = 0;          /* no separate data flash; Calib/OEM preserved */
+
 	
 	    if ((inpw(&SYS->RSTSTS) & 0x3) == 0x00) //check reset flag and por flag is clear
     {
         goto _LDROM_LOOP;
     }
-	
-    /* AP bank layout for USB ISP fallback path (matches CFU 124 KB dual bank). *
-     * AP0 = 0x00000-0x1EFFF, AP1 = 0x1F000-0x3DFFF (each 124 KB).              *
-     * g_u32ApromSize spans BOTH banks (AP0 + AP1 = 0x3E000, 248 KB).           *
-     * Calibration (0x3E000) / OEM config (0x3F000) sit above the APROM window  *
-     * so a CMD_UPDATE_APROM / CMD_ERASE_ALL erase preserves them.               */
-    g_u32ApromSize = 0x3E000;        /* AP0 + AP1 = 248 KB */
-    g_u32DataFlashAddr = 0x3E000;    /* Calib/OEM start — APROM erase stops here */
-    g_u32DataFlashSize = 0;          /* no separate data flash; Calib/OEM preserved */
 
     /* ----------------------------------------------------------------------- *
      * Boot decision: verify AP0 and AP1 checksums (gen_checksum_bin.py         *
