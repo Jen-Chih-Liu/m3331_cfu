@@ -32,6 +32,22 @@ static uint16_t ISP_Checksum(uint8_t *buf, int len)
     return c;
 }
 
+/* Return 1 when [u32Addr, u32Addr + u32Len) lies entirely inside the
+ * guarded Calibration/OEM data region, 0 otherwise. */
+static int ISP_DataRegionOK(uint32_t u32Addr, uint32_t u32Len)
+{
+    if (u32Len == 0)
+        return 0;
+    if (u32Addr < FLASH_DATA_BASE)
+        return 0;
+    if (u32Len > (FLASH_DATA_LIMIT - FLASH_DATA_BASE))
+        return 0;                       /* also guards addr + len overflow */
+    if ((u32Addr + u32Len) > FLASH_DATA_LIMIT)
+        return 0;
+
+    return 1;
+}
+
 int ParseISPCmd(uint8_t *pu8Buffer, uint8_t u8len, uint8_t *pu8Response)
 {
     static uint32_t u32PackNo = 1;
@@ -77,6 +93,89 @@ int ParseISPCmd(uint8_t *pu8Buffer, uint8_t u8len, uint8_t *pu8Response)
     else if (u32Lcmd == CMD_RUN_APROM)
     {
         g_u8JumpApromPending = 1;
+    }
+    else if (u32Lcmd == CMD_ERASE_DATA)
+    {
+        uint32_t u32Addr = inpw((uint32_t)(pu8Src + 8));
+        uint32_t u32Len  = inpw((uint32_t)(pu8Src + 12));
+        uint8_t  u8Sts   = ISP_STS_OK;
+
+        if (!ISP_DataRegionOK(u32Addr, u32Len))
+        {
+            u8Sts = ISP_STS_RANGE;
+        }
+        else
+        {
+            /* Erase every flash page that overlaps [addr, addr + len). */
+            uint32_t u32Page = u32Addr & ~(FMC_FLASH_PAGE_SIZE - 1);
+            uint32_t u32End  = u32Addr + u32Len;
+
+            for (; u32Page < u32End; u32Page += FMC_FLASH_PAGE_SIZE)
+            {
+                if (FMC_Erase(u32Page) != 0)
+                {
+                    u8Sts = ISP_STS_ERR;
+                    break;
+                }
+            }
+        }
+
+        outpw((uint32_t)(pu8Response + 8), u8Sts);
+    }
+    else if (u32Lcmd == CMD_WRITE_DATA)
+    {
+        uint32_t u32Addr = inpw((uint32_t)(pu8Src + 8));
+        uint32_t u32Len  = inpw((uint32_t)(pu8Src + 12));
+        uint8_t  u8Sts   = ISP_STS_OK;
+
+        if ((u32Len & 0x7u) || (u32Addr & 0x7u) || (u32Len == 0) || (u32Len > ISP_WRITE_MAX_BYTES))
+        {
+            u8Sts = ISP_STS_ALIGN;
+        }
+        else if (!ISP_DataRegionOK(u32Addr, u32Len))
+        {
+            u8Sts = ISP_STS_RANGE;
+        }
+        else
+        {
+            uint32_t i;
+
+            /* M3331 flash must be programmed 64 bits at a time. */
+            for (i = 0; i < u32Len; i += 8)
+            {
+                uint32_t u32Data0 = inpw((uint32_t)(pu8Src + 16 + i));
+                uint32_t u32Data1 = inpw((uint32_t)(pu8Src + 16 + i + 4));
+
+                if (FMC_Write8Bytes(u32Addr + i, u32Data0, u32Data1) != 0)
+                {
+                    u8Sts = ISP_STS_ERR;
+                    break;
+                }
+            }
+        }
+
+        outpw((uint32_t)(pu8Response + 8), u8Sts);
+    }
+    else if (u32Lcmd == CMD_READ_DATA)
+    {
+        uint32_t u32Addr = inpw((uint32_t)(pu8Src + 8));
+        uint32_t u32Len  = inpw((uint32_t)(pu8Src + 12));
+        uint32_t i;
+
+        if ((u32Len & 0x3u) || (u32Len == 0) || (u32Len > ISP_READ_MAX_BYTES))
+            u32Len = 0;
+
+        if (u32Len && ISP_DataRegionOK(u32Addr, u32Len))
+        {
+            for (i = 0; i < u32Len; i += 4)
+                outpw((uint32_t)(pu8Response + 8 + i), FMC_Read(u32Addr + i));
+        }
+        else
+        {
+            /* Invalid request: return an all-0xFF (erased) pattern. */
+            for (i = 0; i < ISP_READ_MAX_BYTES; i += 4)
+                outpw((uint32_t)(pu8Response + 8 + i), 0xFFFFFFFFu);
+        }
     }
     /* CMD_DISCONNECT and unknown commands: acknowledge with no side effect. */
 

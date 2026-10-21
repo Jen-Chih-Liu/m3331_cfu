@@ -199,7 +199,7 @@ void TMR0_IRQHandler(void)
 /*   0x1EFFC [4B] (unused / 0xFF)                                                                          */
 /* gen_offer_bin.py: --fw-bin <file> --version-offset 0x1EFF0                                              */
 /*---------------------------------------------------------------------------------------------------------*/
-#define FW_VERSION_VALUE   0x03000002u
+#define FW_VERSION_VALUE   0x05000002u
 
 const uint32_t g_FwVersion __attribute__((section(".fw_version"), used)) = FW_VERSION_VALUE;
 

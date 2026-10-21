@@ -9,6 +9,7 @@ rem    1) SampleCode\ISP\ISP_HID_20          target: ISP_HID_20
 rem    2) SampleCode\StdDriver\HSUSBD_HID_CFU target: HSUSBD_HID_CFU_AP0 (bank0)
 rem    3) SampleCode\StdDriver\HSUSBD_HID_CFU target: HSUSBD_HID_CFU_AP1 (bank1)
 rem    4) isp_app\HID_ISP_TOOL                PC host tool (CMake / MSVC)
+rem    5) isp_app\m3331_cal_tool             PC host tool (CMake / MSVC)
 rem
 rem  UV4 build return codes: 0=OK, 1=warnings, >=2=errors
 rem ============================================================
@@ -31,6 +32,9 @@ set "CFU_OBJ=%ROOT%SampleCode\StdDriver\HSUSBD_HID_CFU\Keil\obj"
 set "TOOL_DIR=%ROOT%isp_app\HID_ISP_TOOL"
 set "TOOL_BUILD=%TOOL_DIR%\build"
 set "TOOL_EXE=%TOOL_BUILD%\Release\HID_ISP_TOOL.exe"
+set "CAL_DIR=%ROOT%isp_app\m3331_cal_tool"
+set "CAL_BUILD=%CAL_DIR%\build"
+set "CAL_EXE=%CAL_BUILD%\Release\m3331_cal_tool.exe"
 
 if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
 
@@ -50,6 +54,9 @@ call :build "%CFU_PROJ%" "HSUSBD_HID_CFU_AP1" || goto :fail
 rem ---- Build 4: HID_ISP_TOOL (PC host tool, CMake/MSVC) -------
 call :build_tool || goto :fail
 
+rem ---- Build 5: m3331_cal_tool (PC host tool, CMake/MSVC) -----
+call :build_cal_tool || goto :fail
+
 rem ---- Collect .bin files into out ----------------------------
 echo.
 echo ------------------------------------------------------------
@@ -59,6 +66,7 @@ copy /Y "%ISP_OBJ%\ISP_HID_20.bin"                  "%OUT_DIR%\" >nul && echo   
 copy /Y "%CFU_OBJ%\HSUSBD_HID_CFU_AP0*.bin"         "%OUT_DIR%\" >nul && echo   [OK] HSUSBD_HID_CFU_AP0*.bin
 copy /Y "%CFU_OBJ%\HSUSBD_HID_CFU_AP1*.bin"         "%OUT_DIR%\" >nul && echo   [OK] HSUSBD_HID_CFU_AP1*.bin
 copy /Y "%TOOL_EXE%"                                "%OUT_DIR%\" >nul && echo   [OK] HID_ISP_TOOL.exe
+copy /Y "%CAL_EXE%"                                 "%OUT_DIR%\" >nul && echo   [OK] m3331_cal_tool.exe
 
 echo.
 echo ============================================================
@@ -120,6 +128,39 @@ if not exist "%TOOL_EXE%" (
     exit /b 1
 )
 echo [OK] Build finished for HID_ISP_TOOL
+exit /b 0
+
+rem ============================================================
+rem  :build_cal_tool
+rem     Configure + build the m3331_cal_tool PC host tool via CMake.
+rem     Requires cmake on PATH and an MSVC toolchain (Visual Studio).
+rem ============================================================
+:build_cal_tool
+echo.
+echo ------------------------------------------------------------
+echo  Building: m3331_cal_tool ^(CMake / MSVC^)
+echo ------------------------------------------------------------
+where cmake >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] cmake not found on PATH. Install CMake or run from a
+    echo         Visual Studio Developer Command Prompt.
+    exit /b 1
+)
+cmake -S "%CAL_DIR%" -B "%CAL_BUILD%" -A x64
+if errorlevel 1 (
+    echo [ERROR] CMake configure failed for m3331_cal_tool
+    exit /b 1
+)
+cmake --build "%CAL_BUILD%" --config Release
+if errorlevel 1 (
+    echo [ERROR] CMake build failed for m3331_cal_tool
+    exit /b 1
+)
+if not exist "%CAL_EXE%" (
+    echo [ERROR] m3331_cal_tool.exe not found after build
+    exit /b 1
+)
+echo [OK] Build finished for m3331_cal_tool
 exit /b 0
 
 :fail

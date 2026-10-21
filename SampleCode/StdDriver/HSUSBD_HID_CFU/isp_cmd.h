@@ -28,6 +28,30 @@
 #define CMD_GET_DEVICEID    0x000000B1
 #define CMD_GET_FLASHMODE   0x000000CA
 
+/* Data-region flash access (Calibration + OEM config), usable while the
+ * application runs in APROM.  The guarded region never overlaps the two
+ * executable firmware banks, so these operations are safe at run time.
+ *   Request : [8..11]=address, [12..15]=length, [16..]=data (write only)
+ *   Response: [8]=status (erase/write) or [8..]=data bytes (read)            */
+#define CMD_ERASE_DATA      0x000000D0
+#define CMD_WRITE_DATA      0x000000D1
+#define CMD_READ_DATA       0x000000D2
+
+/* Writable data region: Calibration (0x3E000) + OEM config (0x3F000). */
+#define FLASH_DATA_BASE     0x0003E000UL
+#define FLASH_DATA_LIMIT    0x00040000UL   /* one byte past the last address  */
+
+/* Per-packet payload caps. Writes use FMC 64-bit programming, so the write
+ * payload must stay 8-byte aligned; reads stay 4-byte aligned. */
+#define ISP_WRITE_MAX_BYTES 40             /* 8-byte aligned, fits [16..55]   */
+#define ISP_READ_MAX_BYTES  48             /* data fits at response [8..55]    */
+
+/* Status codes returned at response byte 8 for erase/write. */
+#define ISP_STS_OK          0
+#define ISP_STS_RANGE       1              /* address/length outside region   */
+#define ISP_STS_ALIGN       2              /* length/addr not 8-byte aligned  */
+#define ISP_STS_ERR         3              /* FMC erase/program failure        */
+
 /* Deferred boot requests handled by the main loop (never inside the ISR). */
 extern volatile uint8_t g_u8JumpLdromPending;
 extern volatile uint8_t g_u8JumpApromPending;

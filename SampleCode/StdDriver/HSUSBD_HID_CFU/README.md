@@ -31,7 +31,7 @@
 | USB 控制器 | HSUSBD (High-Speed USB Device) |
 | CFU 協議版本 | Revision 2 |
 | 升級方式 | A/B 雙 Bank 輪替 (Dual-Bank Swap) |
-| 附加協議 | USB HID ISP 通道（讀版本資訊、跳轉 LDROM，與 CFU 共用同一介面）|
+| 附加協議 | USB HID ISP 通道（讀版本資訊、跳轉 LDROM、Calibration/OEM 資料區 erase/read/write，與 CFU 共用同一介面）|
 | USB VID / PID | `0x0416` / `0xF502` |
 | 系統時脈 | 180 MHz (HCLK)，PCLK = 90 MHz |
 | Debug UART | UART0，115200 bps，PB12 (RXD) / PB13 (TXD) |
@@ -46,7 +46,7 @@ HSUSBD_HID_CFU/
 ├── main.c                          # 系統初始化、USB 開啟、CFU 引擎啟動、LDROM 跳轉
 ├── hid_cfu.h                       # HID Report ID、Usage Page、ISP 通道定義
 ├── hid_transfer.c / .h             # HSUSBD HID 端點設定與中斷處理、ISP/CFU 路由
-├── isp_cmd.c / .h                  # USB HID ISP 命令解析 (讀版本、跳轉 LDROM/APROM)
+├── isp_cmd.c / .h                  # USB HID ISP 命令解析 (讀版本、跳轉 LDROM/APROM、Calib/OEM 資料區 R/W)
 ├── descriptors.c                   # USB 裝置、組態、HID 描述符
 ├── gen_offer_bin.py                # Offer 封包產生工具 (Python)
 ├── gen_checksum_bin.py             # Checksum 嵌入工具 (Python)
@@ -539,8 +539,13 @@ SYS_LockReg();
 | `CMD_RUN_LDROM` | `0xAC` | **跳轉至 LDROM ISP Bootloader** | ack（隨後跳轉）|
 | `CMD_RUN_APROM` | `0xAB` | 重啟至 APROM | ack（隨後 `NVIC_SystemReset()`）|
 | `CMD_DISCONNECT` | `0xAF` | 結束連線 | ack（無副作用）|
+| `CMD_ERASE_DATA` | `0xD0` | **抹除 Calib/OEM 資料區** page | `[8]` = status |
+| `CMD_WRITE_DATA` | `0xD1` | **寫入 Calib/OEM 資料區** | `[8]` = status |
+| `CMD_READ_DATA` | `0xD2` | **讀取 Calib/OEM 資料區** | `[8..]` = data |
 
 > **版本來源**：`CMD_GET_FWVER` 回傳完整 4-byte 應用程式版本 `g_FwVersion`（例 `0x03000002`），格式同第 5 節，而非獨立 ISP Bootloader 的單一位元組 `0x32`。
+>
+> **資料區指令**：`CMD_ERASE_DATA` / `CMD_WRITE_DATA` / `CMD_READ_DATA` 可在 APROM 執行期間存取 Calibration（`0x3E000`）與 OEM config（`0x3F000`）區，詳見第 13.6 節。
 
 ### 13.3 回應封包格式
 
@@ -588,6 +593,59 @@ HID_ISP_TOOL.exe --run-ldrom
 
 > CFU 應用的 ISP 通道僅提供資訊查詢與開機切換；APROM 的實際燒錄需先 `--run-ldrom` 進入 LDROM Bootloader，再以 `HID_ISP_TOOL.exe firmware.bin` 燒錄。詳見該工具的 README。
 
+### 13.6 Calibration / OEM 資料區存取（ISP 通道）
+
+`CMD_ERASE_DATA` / `CMD_WRITE_DATA` / `CMD_READ_DATA` 讓主機在 **APROM 應用執行期間**，透過 ISP 通道直接抹除/寫入/讀取 Calibration 與 OEM config 資料區。由於寫入範圍被韌體嚴格限制在 A/B Bank 之外，不會覆寫正在執行的韌體。
+
+#### 守護範圍與對齊
+
+| 常數 | 值 | 說明 |
+|------|----|------|
+| `FLASH_DATA_BASE` | `0x3E000` | 可存取區起始（Calibration）|
+| `FLASH_DATA_LIMIT` | `0x40000` | 可存取區結束（上界，不含）|
+| Calibration | `0x3E000 – 0x3EFFF` | 4 KB |
+| OEM config | `0x3F000 – 0x3FFFF` | 4 KB |
+
+- 任何落在 `0x3E000 ~ 0x3FFFF` 之外的 erase/write 會被拒絕並回傳 `status = 1 (RANGE)`。
+- m3331 flash 僅支援 **64-bit（8-byte）燒錄**，故寫入位址與長度皆需 **8-byte 對齊**，每封包上限 **40 bytes**；讀取每封包上限 **48 bytes**。
+- 抹除以 flash page（1 KB）為單位，涵蓋 `[addr, addr+len)` 的所有 page。
+
+#### 封包佈局
+
+```
+Request : [0..3]=command, [4..7]=packet number,
+          [8..11]=address, [12..15]=length, [16..]=data (僅 WRITE)
+Response: [0..1]=request checksum, [4..7]=packet number,
+          [8]=status (ERASE/WRITE) 或 [8..]=data (READ)
+```
+
+#### Status 結果碼（erase / write）
+
+| 值 | 名稱 | 意義 |
+|----|------|------|
+| 0 | `ISP_STS_OK` | 成功 |
+| 1 | `ISP_STS_RANGE` | 位址/長度超出守護範圍 |
+| 2 | `ISP_STS_ALIGN` | 位址/長度非 8-byte 對齊或超過每封包上限 |
+| 3 | `ISP_STS_ERR` | FMC 抹除/燒錄失敗 |
+
+#### 主機端工具
+
+專屬主機工具 [`isp_app/m3331_cal_tool`](../../../isp_app/m3331_cal_tool) 封裝了上述指令（PID `0xF502`、Report ID 40/41），提供抹除 → 寫入 → 讀回驗證的一鍵流程：
+
+```powershell
+# 寫入 Calibration 區（0x3E000, 4 KB，含讀回驗證）
+m3331_cal_tool.exe --write-calib calib.bin
+
+# 寫入 OEM config 區（0x3F000, 4 KB）
+m3331_cal_tool.exe --write-oem oem.bin
+
+# 讀回 Calibration / OEM 區到檔案
+m3331_cal_tool.exe --read-calib calib_readback.bin
+m3331_cal_tool.exe --read-oem   oem_readback.bin
+```
+
+> 裝置端實作位於 `isp_cmd.c` 的 `CMD_ERASE_DATA` / `CMD_WRITE_DATA` / `CMD_READ_DATA` 分支，使用 StdDriver `FMC_Erase` / `FMC_Write8Bytes` / `FMC_Read`（寫入必須用 64-bit 的 `FMC_Write8Bytes`，32-bit 的 `FMC_Write` 不會真正寫入 flash）。工具詳細說明見 [`m3331_cal_tool/README.md`](../../../isp_app/m3331_cal_tool/README.md)。
+
 ---
 
 ## 14. 注意事項與常見問題
@@ -634,6 +692,7 @@ HID_ISP_TOOL.exe --run-ldrom
 - [Microsoft CFU 協議規格](https://github.com/microsoft/CFU)
 - [Microsoft CFU 開源專案與 Protocol 文件](https://github.com/microsoft/CFU)
 - [HID_ISP_TOOL 主機端 ISP 燒錄/查詢工具](../../../isp_app/HID_ISP_TOOL/README.md)
+- [m3331_cal_tool 主機端 Calibration/OEM 資料區工具](../../../isp_app/m3331_cal_tool/README.md)
 - [ISP_HID_20 LDROM HID ISP 開機載入器](../../ISP/ISP_HID_20/README.md)
 - Nuvoton m3331 Technical Reference Manual
 - Nuvoton BSP: `m3331bsp-master/Library/StdDriver/`
